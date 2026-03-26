@@ -22,6 +22,10 @@ class Settings(BaseModel):
     angr_cmd: str | None = None
     cape_cmd: str | None = None
     drakvuf_cmd: str | None = None
+    yara_rules_dir: Path = Field(default_factory=lambda: Path.cwd() / "data" / "yara_rules")
+    ghidra_project_dir: Path = Field(default_factory=lambda: Path.cwd() / "data" / "ghidra_projects")
+    ghidra_timeout: int = 300
+    ghidra_max_functions: int = 50
 
     def ensure_directories(self) -> None:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)

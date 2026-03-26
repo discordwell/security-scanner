@@ -12,6 +12,16 @@
   - Shared conftest fixtures, tests for utils/adapters/baselines/fusion/API errors
   - Structured logging via stdlib logging added to all pipeline and adapter modules
 
+### 2026-03-26T01:00:00Z
+- Completed Phase 2: real tool integration for YARA, capa, Ghidra
+  - YARA adapter uses yara-python with compiled rules from data/yara_rules/
+  - capa adapter uses capa CLI with JSON subprocess output
+  - Ghidra adapter uses analyzeHeadless via subprocess + scripts/ghidra_export.py
+  - All three fall back to heuristics when tools unavailable
+  - Ghidra emits coverage_gap observations (fixes fusion.py gap)
+  - StaticAnalysisPipeline now accepts Settings, wires config to adapters
+  - 109 tests, 96% coverage
+
 ## Key Findings
 
 - The MVP has solid architecture with good separation of concerns (adapters, pipeline stages, service orchestrator)

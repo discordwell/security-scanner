@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 
 from ..adapters import CapaAdapter, GhidraAdapter, ProvenanceAdapter, YaraAdapter
-from ..models import ArtifactRecord, ExecutionPolicy, Observation, ObservationSeverity, ProvenanceBundle
+from ..config import Settings
+from ..models import ArtifactRecord, ExecutionPolicy, ProvenanceBundle
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +16,17 @@ class StaticAnalysisPipeline:
         capa: CapaAdapter | None = None,
         ghidra: GhidraAdapter | None = None,
         provenance: ProvenanceAdapter | None = None,
+        settings: Settings | None = None,
     ) -> None:
-        self.yara = yara or YaraAdapter()
-        self.capa = capa or CapaAdapter()
-        self.ghidra = ghidra or GhidraAdapter()
+        settings = settings or Settings()
+        self.yara = yara or YaraAdapter(rules_dir=settings.yara_rules_dir)
+        self.capa = capa or CapaAdapter(capa_cmd=settings.capa_cmd)
+        self.ghidra = ghidra or GhidraAdapter(
+            ghidra_cmd=settings.ghidra_cmd,
+            project_dir=settings.ghidra_project_dir,
+            timeout=settings.ghidra_timeout,
+            max_functions=settings.ghidra_max_functions,
+        )
         self.provenance = provenance or ProvenanceAdapter()
 
     def analyze(
@@ -30,7 +38,7 @@ class StaticAnalysisPipeline:
     ) -> ArtifactRecord:
         logger.info("Static analysis: %s", artifact.sha256[:12])
         yara_result = self.yara.analyze(data)
-        capa_result = self.capa.analyze(artifact.strings)
+        capa_result = self.capa.analyze(artifact.strings, data=data)
         ghidra_result = self.ghidra.analyze(data, deep_limit=policy.deep_decompile_limit)
         provenance_summary, provenance_tool = self.provenance.analyze(provenance_bundle)
 

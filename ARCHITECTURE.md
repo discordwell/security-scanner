@@ -106,11 +106,23 @@ The interfaces are structured so that NATS/PostgreSQL/MinIO-backed implementatio
 | No HIGH/MEDIUM + trusted provenance + baseline match + no coverage gaps | CLEAN |
 | None of the above | INCONCLUSIVE |
 
+## Tool Integration
+
+Each static analysis adapter supports a real tool backend with automatic fallback to built-in heuristics:
+
+| Adapter | Real Tool | Fallback | Config |
+|---------|-----------|----------|--------|
+| YARA | `yara-python` library, rules from `data/yara_rules/` | Pattern-based string matching | `yara_rules_dir` in Settings |
+| capa | `capa` CLI (JSON output via subprocess) | String-based capability detection | `capa_cmd` in Settings |
+| Ghidra | `analyzeHeadless` via subprocess + `scripts/ghidra_export.py` | Suspicious region promotion | `ghidra_cmd` in Settings |
+
+When a real tool is unavailable or fails, the adapter transparently falls back to heuristics. The `mode` field in `ToolExecution.details` indicates which backend was used (`"yara-python"`, `"capa-cli"`, `"ghidra-headless"`, or `"heuristic"`).
+
+Ghidra emits `coverage_gap` observations when the number of functions exceeds the analysis limit or decompilation fails, which feeds into the fusion verdict logic.
+
 ## Stubbed Components
 
-The following adapters accept configuration but return placeholder results in the current MVP:
+The following adapters accept configuration but return placeholder results:
 - **angr** - symbolic execution
 - **CAPE** - dynamic sandbox detonation
 - **DRAKVUF** - anti-evasion dynamic analysis
-
-YARA, Ghidra, and Capa adapters use built-in heuristics rather than calling external tools.
