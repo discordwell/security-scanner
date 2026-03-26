@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379"
     use_task_queue: bool = False
 
+    # Auth & security
+    require_auth: bool = False
+    global_rate_limit: int = 120
+    max_upload_bytes: int = 100 * 1024 * 1024
+    cors_origins: list[str] = ["*"]
+
     def ensure_directories(self) -> None:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         self.runtime_dir.mkdir(parents=True, exist_ok=True)

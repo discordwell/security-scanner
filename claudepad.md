@@ -33,6 +33,14 @@
   - pydantic-settings BaseSettings with SCANNER_ env prefix
   - 115 tests passing, 91% coverage
 
+### 2026-03-26T02:00:00Z
+- Completed Phase 4: auth, middleware, health, CLI
+  - API key auth with Bearer tokens, scoped permissions (submit, read, admin)
+  - Middleware stack: request logging, error handling, security headers, request size limits, CORS
+  - GET /health endpoint
+  - CLI subcommands: serve, create-key, migrate
+  - 123 tests passing, 88% coverage
+
 ## Key Findings
 
 - The MVP has solid architecture with good separation of concerns (adapters, pipeline stages, service orchestrator)

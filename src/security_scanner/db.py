@@ -93,6 +93,20 @@ class BaselineRow(Base):
     )
 
 
+class ApiKeyRow(Base):
+    __tablename__ = "api_keys"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(256))
+    scopes: Mapped[list] = mapped_column(JSON, default=list)
+    rate_limit: Mapped[int] = mapped_column(Integer, default=60)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+    )
+
+
 def make_engine(database_url: str, echo: bool = False):
     return create_async_engine(database_url, echo=echo)
 
