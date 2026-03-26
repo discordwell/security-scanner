@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     ghidra_project_dir: Path = Field(default_factory=lambda: Path.cwd() / "data" / "ghidra_projects")
     ghidra_timeout: int = 300
     ghidra_max_functions: int = 50
+    angr_timeout_per_function: int = 60
+    angr_max_states: int = 256
+    angr_max_functions: int = 8
 
     # Database
     database_url: str = ""

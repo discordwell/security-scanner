@@ -12,9 +12,22 @@ class SymbolicPipeline:
     def __init__(self, angr: AngrAdapter | None = None) -> None:
         self.angr = angr or AngrAdapter()
 
-    def analyze(self, artifact: ArtifactRecord, policy: ExecutionPolicy) -> ArtifactRecord:
-        logger.info("Symbolic analysis: %s (%d functions, enabled=%s)", artifact.sha256[:12], len(artifact.functions), policy.enable_symbolic_execution)
-        result = self.angr.analyze(suspicious_functions=len(artifact.functions), enabled=policy.enable_symbolic_execution)
+    def analyze(
+        self,
+        artifact: ArtifactRecord,
+        policy: ExecutionPolicy,
+        data: bytes | None = None,
+    ) -> ArtifactRecord:
+        logger.info(
+            "Symbolic analysis: %s (%d functions, enabled=%s)",
+            artifact.sha256[:12], len(artifact.functions), policy.enable_symbolic_execution,
+        )
+        result = self.angr.analyze(
+            suspicious_functions=len(artifact.functions),
+            enabled=policy.enable_symbolic_execution,
+            data=data,
+            functions=artifact.functions,
+        )
         artifact.observations.extend(result.observations)
         artifact.behavior.extend(result.behavior)
         if result.tool_run is not None:

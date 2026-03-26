@@ -51,6 +51,15 @@
   - .env.example, .dockerignore
   - 131 tests passing
 
+### 2026-03-26T03:00:00Z
+- Implemented real angr adapter (the last stub)
+  - Targeted symbolic execution of suspicious functions
+  - Resolves dangerous sinks from symbol table / PLT / PE imports
+  - Per-function timeout and state limits
+  - HIGH severity observations for confirmed reachable dangerous paths
+  - 10 new tests (mocked angr internals)
+  - 141 tests total
+
 ## Key Findings
 
 - The MVP has solid architecture with good separation of concerns (adapters, pipeline stages, service orchestrator)

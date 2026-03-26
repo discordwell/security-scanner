@@ -136,9 +136,17 @@ Ghidra emits `coverage_gap` observations when the number of functions exceeds th
 
 Both fall back to placeholder stubs when no URL is configured.
 
-## Stubbed Components
+## Symbolic Execution (angr)
 
-- **angr** - symbolic execution (placeholder only, pending Phase 5+)
+When `angr` is installed (`pip install angr`) and `enable_symbolic_execution=true` is set in the submission policy:
+
+1. The adapter loads the binary into an `angr.Project`
+2. Resolves dangerous sink functions (`system`, `execve`, `connect`, `WriteProcessMemory`, etc.) from the binary's symbol table and PLT/import table
+3. For each suspicious function (sorted by Ghidra triage score, capped at `angr_max_functions`), creates a targeted `SimulationManager` exploration
+4. If a reachable path to a dangerous sink is found, emits a **HIGH** severity observation with the function name, sink name, path length, and states explored
+5. Enforces per-function timeout (`angr_timeout_per_function`, default 60s) and state limit (`angr_max_states`, default 256)
+
+Falls back to a placeholder stub when angr is not installed.
 
 ## Deployment
 

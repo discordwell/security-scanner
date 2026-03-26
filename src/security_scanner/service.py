@@ -145,8 +145,8 @@ class AnalysisService:
                 claimed_product=claimed_product,
                 claimed_signer=provenance_bundle.claimed_signer,
             )
-            artifact = self.dynamic.analyze(artifact, policy)
-            artifact = self.symbolic.analyze(artifact, policy)
+            artifact = self.dynamic.analyze(artifact, policy, data=artifact_data)
+            artifact = self.symbolic.analyze(artifact, policy, data=artifact_data)
             await self.repository.save_artifact(artifact)
             analyzed_artifacts.append(artifact)
 
