@@ -127,9 +127,35 @@ When a real tool is unavailable or fails, the adapter transparently falls back t
 
 Ghidra emits `coverage_gap` observations when the number of functions exceeds the analysis limit or decompilation fails, which feeds into the fusion verdict logic.
 
+## Dynamic Analysis Adapters
+
+| Adapter | Backend | Config |
+|---------|---------|--------|
+| CAPE | HTTP client to CAPE Sandbox REST API (submit, poll, report) | `cape_cmd` = CAPE URL |
+| DRAKVUF | HTTP client to DRAKVUF Sandbox API (submit, poll, report) | `drakvuf_cmd` = DRAKVUF URL |
+
+Both fall back to placeholder stubs when no URL is configured.
+
 ## Stubbed Components
 
-The following adapters accept configuration but return placeholder results:
-- **angr** - symbolic execution
-- **CAPE** - dynamic sandbox detonation
-- **DRAKVUF** - anti-evasion dynamic analysis
+- **angr** - symbolic execution (placeholder only, pending Phase 5+)
+
+## Deployment
+
+```bash
+# Local development
+uv run python -m security_scanner serve
+
+# Docker (Postgres + Redis + API)
+docker compose up
+
+# Create API key (when SCANNER_REQUIRE_AUTH=true)
+uv run python -m security_scanner create-key --name "my-key" --scopes submit,read
+
+# Run migrations
+uv run python -m security_scanner migrate
+```
+
+## CI
+
+GitHub Actions workflow (`.github/workflows/ci.yml`) runs tests and builds the Docker image on every push to `main`.

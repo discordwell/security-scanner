@@ -1,0 +1,66 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      SCANNER_DATABASE_URL: "postgresql+asyncpg://scanner:scanner@db:5432/scanner"
+      SCANNER_REDIS_URL: "redis://redis:6379"
+      SCANNER_USE_TASK_QUEUE: "false"
+      SCANNER_REQUIRE_AUTH: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - artifact_data:/app/data/artifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build: .
+    command: ["python", "-m", "security_scanner", "serve"]
+    entrypoint: []
+    environment:
+      SCANNER_DATABASE_URL: "postgresql+asyncpg://scanner:scanner@db:5432/scanner"
+      SCANNER_REDIS_URL: "redis://redis:6379"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - artifact_data:/app/data/artifacts
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: scanner
+      POSTGRES_PASSWORD: scanner
+      POSTGRES_DB: scanner
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scanner"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pg_data:
+  redis_data:
+  artifact_data:

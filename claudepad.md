@@ -41,6 +41,16 @@
   - CLI subcommands: serve, create-key, migrate
   - 123 tests passing, 88% coverage
 
+### 2026-03-26T02:30:00Z
+- Completed Phase 5: Docker, dynamic analysis adapters, CI
+  - Dockerfile (multi-stage, python:3.12-slim + uv)
+  - docker-compose.yml (api, worker, postgres, redis)
+  - CAPE adapter with HTTP API client (submit, poll, report parsing)
+  - DRAKVUF adapter with HTTP API client (syscalls, injections, evasions)
+  - GitHub Actions CI (test + docker build)
+  - .env.example, .dockerignore
+  - 131 tests passing
+
 ## Key Findings
 
 - The MVP has solid architecture with good separation of concerns (adapters, pipeline stages, service orchestrator)
