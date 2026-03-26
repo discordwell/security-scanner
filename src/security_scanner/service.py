@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 from .baselines import build_baseline_record, compare_against_baselines
 from .models import ArtifactRecord, ExecutionPolicy, ProvenanceBundle, SubmissionRecord, SubmissionStatus, VerdictRecord
@@ -47,6 +50,7 @@ class AnalysisService:
         claimed_product: str | None = None,
         provenance_bundle: ProvenanceBundle | dict | None = None,
     ) -> SubmissionResult:
+        logger.info("Submission received: %s", filename)
         policy = policy or ExecutionPolicy()
         if provenance_bundle is None:
             provenance_bundle = ProvenanceBundle()
@@ -88,6 +92,7 @@ class AnalysisService:
 
         root_artifact = next(artifact for artifact in analyzed_artifacts if artifact.sha256 == submission.root_sha256)
         verdict = self.fusion.verdict_for(root_artifact, analyzed_artifacts)
+        logger.info("Verdict for %s: %s", filename, verdict.state.value)
         self.repository.save_verdict(verdict)
 
         submission.status = SubmissionStatus.COMPLETE
@@ -106,6 +111,7 @@ class AnalysisService:
         version: str | None,
         signer: str | None,
     ):
+        logger.info("Registering baseline: %s product=%s", filename, product)
         ingest_result = self.ingest.ingest(filename=filename, data=data, max_depth=0, max_strings=256)
         artifact = self.static.analyze(
             ingest_result.root,

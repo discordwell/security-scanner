@@ -1,20 +1,27 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 
+from .logging_config import setup_logging
 from .models import ExecutionPolicy, ProvenanceBundle
 from .service import AnalysisService
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_logging()
+    logger.info("Security scanner starting up")
     if not hasattr(app.state, "service"):
         app.state.service = AnalysisService()
     yield
+    logger.info("Security scanner shutting down")
 
 
 app = FastAPI(title="Security Scanner", version="0.1.0", lifespan=lifespan)

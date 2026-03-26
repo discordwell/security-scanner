@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 from ..models import ProvenanceBundle, ProvenanceSummary, ToolExecution, ToolStatus
+
+logger = logging.getLogger(__name__)
 
 
 class ProvenanceAdapter:
@@ -20,4 +24,6 @@ class ProvenanceAdapter:
             summary="Validated provided provenance metadata." if trusted else "No machine-verifiable provenance was provided.",
             details=summary.details,
         )
+        if not trusted:
+            logger.warning("No trusted provenance for signer=%s", bundle.claimed_signer)
         return summary, execution

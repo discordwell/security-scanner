@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 from ..models import ArtifactKind, ArtifactRecord, Observation, ObservationSeverity
 from ..storage import LocalArtifactStore
@@ -26,6 +29,7 @@ class IngestPipeline:
         kind: ArtifactKind = ArtifactKind.ROOT,
         parent_sha256: str | None = None,
     ) -> IngestResult:
+        logger.info("Ingesting %s (%d bytes, depth=%d)", filename, len(data), max_depth)
         root = self._build_artifact(filename, data, kind=kind, parent_sha256=parent_sha256, max_strings=max_strings)
         extracted: list[ArtifactRecord] = []
         if max_depth > 0:

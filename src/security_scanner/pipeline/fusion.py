@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 from ..models import ArtifactRecord, ObservationSeverity, VerdictRecord, VerdictState
+
+logger = logging.getLogger(__name__)
 
 
 class FusionPipeline:
@@ -55,6 +59,9 @@ class FusionPipeline:
             VerdictState.MALICIOUS: "Artifact exhibits high-confidence malicious characteristics.",
             VerdictState.INCONCLUSIVE: "Artifact could not be cleared with current evidence coverage.",
         }[state]
+
+        logger.info("Fusion verdict: %s for %s (%d observations, %d pending actions)",
+                    state.value, root_artifact.sha256[:12], len(all_observations), len(pending_actions))
 
         return VerdictRecord(
             sha256=root_artifact.sha256,

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from ..models import BehaviorEvent, ToolExecution, ToolStatus
 from .types import AdapterResult
+
+logger = logging.getLogger(__name__)
 
 
 class CapeAdapter:

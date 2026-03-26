@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 data/runtime/state.json
 *.egg-info/
+data/artifacts/
+.coverage

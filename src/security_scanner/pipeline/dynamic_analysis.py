@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from ..adapters import CapeAdapter, DrakvufAdapter
 from ..models import ArtifactRecord, ExecutionPolicy
+
+logger = logging.getLogger(__name__)
 
 
 class DynamicAnalysisPipeline:
@@ -10,6 +14,7 @@ class DynamicAnalysisPipeline:
         self.drakvuf = drakvuf or DrakvufAdapter()
 
     def analyze(self, artifact: ArtifactRecord, policy: ExecutionPolicy) -> ArtifactRecord:
+        logger.info("Dynamic analysis: %s (enabled=%s)", artifact.sha256[:12], policy.enable_dynamic_analysis)
         cape_result = self.cape.analyze(enabled=policy.enable_dynamic_analysis)
         drakvuf_result = self.drakvuf.analyze(enabled=policy.enable_dynamic_analysis)
         artifact.behavior.extend(cape_result.behavior)

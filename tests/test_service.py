@@ -1,50 +1,18 @@
 from __future__ import annotations
 
-import io
-import zipfile
 
-from security_scanner.repository import JsonRepository
-from security_scanner.service import AnalysisService
-from security_scanner.storage import LocalArtifactStore
-
-
-def build_service(tmp_path):
-    artifact_store = LocalArtifactStore(tmp_path / "artifacts")
-    repository = JsonRepository(tmp_path / "state.json")
-    return AnalysisService(repository=repository, artifact_store=artifact_store)
-
-
-def benign_pe_bytes() -> bytes:
-    return b"MZ" + (b"\x00" * 64) + b"trusted-binary-content" + (b"A" * 256)
-
-
-def malicious_pe_bytes() -> bytes:
-    return (
-        b"MZ"
-        + (b"\x00" * 64)
-        + b"CreateRemoteThread"
-        + b"WriteProcessMemory"
-        + b"VirtualAlloc"
-        + b"https://evil.example"
-        + (b"B" * 512)
-    )
-
-
-def test_register_baseline_and_clean_submission(tmp_path):
-    service = build_service(tmp_path)
-    sample = benign_pe_bytes()
-
-    baseline = service.register_baseline(
+def test_register_baseline_and_clean_submission(tmp_service, benign_pe_bytes):
+    baseline = tmp_service.register_baseline(
         filename="word.exe",
-        data=sample,
+        data=benign_pe_bytes,
         product="Word",
         version="16.0.0.0",
         signer="Microsoft Corporation",
     )
 
-    result = service.submit(
+    result = tmp_service.submit(
         filename="word.exe",
-        data=sample,
+        data=benign_pe_bytes,
         claimed_product="Word",
         provenance_bundle={"claimed_signer": "Microsoft Corporation", "authenticode_trusted": True},
     )
@@ -55,26 +23,20 @@ def test_register_baseline_and_clean_submission(tmp_path):
     assert result.verdict.pending_actions == []
 
 
-def test_malicious_strings_force_malicious_verdict(tmp_path):
-    service = build_service(tmp_path)
-    result = service.submit(
+def test_malicious_strings_force_malicious_verdict(tmp_service, malicious_pe_bytes):
+    result = tmp_service.submit(
         filename="payload.exe",
-        data=malicious_pe_bytes(),
+        data=malicious_pe_bytes,
         provenance_bundle={"claimed_signer": "Unknown Vendor"},
     )
 
     assert result.verdict.state.value == "malicious"
-    assert any("process injection" in observation.message.lower() for observation in result.verdict.observations)
+    assert any("process injection" in obs.message.lower() for obs in result.verdict.observations)
     assert result.verdict.pending_actions
 
 
-def test_recursive_archive_analysis_uses_child_artifacts(tmp_path):
-    service = build_service(tmp_path)
-    archive_buffer = io.BytesIO()
-    with zipfile.ZipFile(archive_buffer, "w") as archive:
-        archive.writestr("hidden.exe", malicious_pe_bytes())
-
-    result = service.submit(filename="bundle.zip", data=archive_buffer.getvalue())
+def test_recursive_archive_analysis_uses_child_artifacts(tmp_service, malicious_zip):
+    result = tmp_service.submit(filename="bundle.zip", data=malicious_zip)
 
     assert result.verdict.state.value == "malicious"
     assert len(result.artifacts) == 2

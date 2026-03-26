@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from ..adapters import AngrAdapter
 from ..models import ArtifactRecord, ExecutionPolicy
+
+logger = logging.getLogger(__name__)
 
 
 class SymbolicPipeline:
@@ -9,6 +13,7 @@ class SymbolicPipeline:
         self.angr = angr or AngrAdapter()
 
     def analyze(self, artifact: ArtifactRecord, policy: ExecutionPolicy) -> ArtifactRecord:
+        logger.info("Symbolic analysis: %s (%d functions, enabled=%s)", artifact.sha256[:12], len(artifact.functions), policy.enable_symbolic_execution)
         result = self.angr.analyze(suspicious_functions=len(artifact.functions), enabled=policy.enable_symbolic_execution)
         artifact.observations.extend(result.observations)
         artifact.behavior.extend(result.behavior)

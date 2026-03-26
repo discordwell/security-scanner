@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from ..adapters import CapaAdapter, GhidraAdapter, ProvenanceAdapter, YaraAdapter
 from ..models import ArtifactRecord, ExecutionPolicy, Observation, ObservationSeverity, ProvenanceBundle
+
+logger = logging.getLogger(__name__)
 
 
 class StaticAnalysisPipeline:
@@ -24,6 +28,7 @@ class StaticAnalysisPipeline:
         policy: ExecutionPolicy,
         provenance_bundle: ProvenanceBundle,
     ) -> ArtifactRecord:
+        logger.info("Static analysis: %s", artifact.sha256[:12])
         yara_result = self.yara.analyze(data)
         capa_result = self.capa.analyze(artifact.strings)
         ghidra_result = self.ghidra.analyze(data, deep_limit=policy.deep_decompile_limit)
