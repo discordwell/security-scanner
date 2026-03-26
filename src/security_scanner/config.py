@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     ghidra_max_functions: int = 50
 
     # Database
-    database_url: str = "sqlite+aiosqlite:///data/runtime/scanner.db"
+    database_url: str = ""
 
     # Task queue
     redis_url: str = "redis://localhost:6379"
@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     def ensure_directories(self) -> None:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        if not self.database_url:
+            db_path = self.runtime_dir / "scanner.db"
+            self.database_url = f"sqlite+aiosqlite:///{db_path}"
 
 
 @lru_cache(maxsize=1)

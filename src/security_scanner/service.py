@@ -132,13 +132,13 @@ class AnalysisService:
             status=SubmissionStatus.ANALYZING,
         )
 
+        baselines = await self.repository.list_baselines()
         analyzed_artifacts: list[ArtifactRecord] = []
         for artifact in all_artifacts:
             artifact_data = self.artifact_store.get(artifact.sha256)
             artifact = await asyncio.to_thread(
                 self.static.analyze, artifact, artifact_data, policy, provenance_bundle,
             )
-            baselines = await self.repository.list_baselines()
             artifact.baseline_diff = compare_against_baselines(
                 artifact=artifact,
                 baselines=baselines,

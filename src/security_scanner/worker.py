@@ -5,10 +5,11 @@ Start with: arq security_scanner.worker.WorkerSettings
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlparse
 
 from .config import get_settings
 from .db import create_tables, make_engine, make_session_factory
-from .models import ExecutionPolicy, ProvenanceBundle, SubmissionStatus
+from .models import ExecutionPolicy, ProvenanceBundle
 from .service import AnalysisService
 from .sql_repository import SqlRepository
 from .storage import LocalArtifactStore
@@ -48,6 +49,13 @@ async def analyze_submission(
     }
 
 
+def _redact_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.password:
+        return parsed._replace(netloc=f"{parsed.username}:***@{parsed.hostname}:{parsed.port}").geturl()
+    return url
+
+
 async def startup(ctx: dict) -> None:
     """Initialize the service for the worker."""
     settings = get_settings()
@@ -61,7 +69,7 @@ async def startup(ctx: dict) -> None:
         artifact_store=LocalArtifactStore(),
     )
     ctx["engine"] = engine
-    logger.info("Worker started with database: %s", settings.database_url)
+    logger.info("Worker started with database: %s", _redact_url(settings.database_url))
 
 
 async def shutdown(ctx: dict) -> None:
@@ -72,22 +80,25 @@ async def shutdown(ctx: dict) -> None:
     logger.info("Worker shut down")
 
 
+def _parse_redis_settings():
+    try:
+        from arq.connections import RedisSettings
+    except ImportError:
+        return None
+
+    settings = get_settings()
+    parsed = urlparse(settings.redis_url)
+    return RedisSettings(
+        host=parsed.hostname or "localhost",
+        port=parsed.port or 6379,
+        password=parsed.password,
+        database=int(parsed.path.lstrip("/") or 0),
+    )
+
+
 class WorkerSettings:
     """arq worker settings."""
     functions = [analyze_submission]
     on_startup = startup
     on_shutdown = shutdown
-    redis_settings = None  # Set from env at import time
-
-    @classmethod
-    def configure(cls):
-        settings = get_settings()
-        try:
-            from arq.connections import RedisSettings
-            host_port = settings.redis_url.replace("redis://", "").split(":")
-            cls.redis_settings = RedisSettings(
-                host=host_port[0] or "localhost",
-                port=int(host_port[1]) if len(host_port) > 1 else 6379,
-            )
-        except ImportError:
-            pass
+    redis_settings = _parse_redis_settings()
