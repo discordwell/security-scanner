@@ -179,7 +179,7 @@ class GhidraAdapter:
                     symbol=symbol,
                     start_address=hex(start),
                     end_address=hex(end),
-                    triage_score=0.9 - (index * 0.05),
+                    triage_score=max(0.1, 0.9 - (index * 0.05)),
                     reason=message,
                     normalized_hash=normalized_hash,
                     decompiled=False,

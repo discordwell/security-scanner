@@ -21,18 +21,13 @@ CAPABILITIES: list[tuple[tuple[str, ...], str, ObservationSeverity, str]] = [
     (("ptrace",), "anti_analysis", ObservationSeverity.MEDIUM, "Likely debugger or anti-analysis checks."),
 ]
 
-CAPA_SEVERITY_MAP: dict[str, ObservationSeverity] = {
-    "attack": ObservationSeverity.HIGH,
-    "mbc": ObservationSeverity.MEDIUM,
-    "capability": ObservationSeverity.MEDIUM,
-}
-
-
 class CapaAdapter:
     def __init__(self, capa_cmd: str | None = None) -> None:
-        self._capa_cmd = capa_cmd
-        if capa_cmd is None and shutil.which("capa"):
-            self._capa_cmd = "capa"
+        if capa_cmd is None:
+            resolved = shutil.which("capa")
+            self._capa_cmd = resolved
+        else:
+            self._capa_cmd = capa_cmd
 
     def analyze(self, strings: list[str], data: bytes | None = None) -> AdapterResult:
         if self._capa_cmd and data is not None:
@@ -42,10 +37,11 @@ class CapaAdapter:
         return self._analyze_heuristic(strings)
 
     def _analyze_with_capa(self, data: bytes) -> AdapterResult | None:
-        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
-            tmp.write(data)
-            tmp_path = Path(tmp.name)
+        tmp_path = None
         try:
+            with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+                tmp.write(data)
             proc = subprocess.run(
                 [self._capa_cmd, "-j", str(tmp_path)],
                 capture_output=True,
@@ -64,7 +60,8 @@ class CapaAdapter:
             logger.warning("Failed to parse capa output: %s", exc)
             return None
         finally:
-            tmp_path.unlink(missing_ok=True)
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
 
     def _parse_capa_report(self, report: dict) -> AdapterResult:
         observations: list[Observation] = []
