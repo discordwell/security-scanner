@@ -104,6 +104,18 @@ def test_suspicious_overridden_to_clean_with_provenance_and_baseline():
     assert verdict.state == VerdictState.CLEAN
 
 
+def test_low_severity_alone_does_not_trigger_suspicious():
+    artifact = _make_artifact(
+        observations=[_obs(ObservationSeverity.LOW)],
+        baseline_distance=0.0,
+        baseline_id="bl-1",
+        baseline_matched=True,
+        provenance_trusted=True,
+    )
+    verdict = FusionPipeline().verdict_for(artifact, [artifact])
+    assert verdict.state == VerdictState.CLEAN
+
+
 def test_inconclusive_verdict_no_provenance_no_baseline():
     artifact = _make_artifact(
         provenance_trusted=False,

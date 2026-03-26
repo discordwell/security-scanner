@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 from ..models import FunctionSummary, Observation, ObservationSeverity, ToolExecution, ToolStatus
 from ..utils import find_suspicious_matches, sha256_text
 from .types import AdapterResult
+
+logger = logging.getLogger(__name__)
 
 
 class GhidraAdapter:

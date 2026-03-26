@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from ..models import Observation, ObservationSeverity, ToolExecution, ToolStatus
 from .types import AdapterResult
+
+logger = logging.getLogger(__name__)
 
 
 CAPABILITIES: list[tuple[tuple[str, ...], str, ObservationSeverity, str]] = [

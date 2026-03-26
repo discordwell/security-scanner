@@ -76,9 +76,9 @@ def test_ghidra_adapter_benign_no_functions():
 def test_ghidra_adapter_triage_scores_decrease():
     data = b"CreateRemoteThread\x00WriteProcessMemory\x00VirtualAlloc"
     result = GhidraAdapter().analyze(data, deep_limit=8)
-    if len(result.functions) >= 2:
-        scores = [f.triage_score for f in result.functions]
-        assert scores == sorted(scores, reverse=True)
+    assert len(result.functions) >= 2
+    scores = [f.triage_score for f in result.functions]
+    assert scores == sorted(scores, reverse=True)
 
 
 # -- ProvenanceAdapter --

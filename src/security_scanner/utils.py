@@ -119,15 +119,31 @@ def find_suspicious_matches(data: bytes) -> list[tuple[int, bytes, str, str]]:
     return matches
 
 
-def maybe_extract_archive(filename: str, data: bytes) -> list[tuple[str, bytes]]:
+MAX_EXTRACT_BYTES = 512 * 1024 * 1024  # 512 MB total extraction limit
+
+
+def _sanitize_member_name(name: str) -> str:
+    parts = Path(name).parts
+    safe_parts = [p for p in parts if p not in ("..", ".") and not p.startswith("/")]
+    return str(Path(*safe_parts)) if safe_parts else "extracted"
+
+
+def maybe_extract_archive(
+    filename: str, data: bytes, max_total_bytes: int = MAX_EXTRACT_BYTES,
+) -> list[tuple[str, bytes]]:
     extracted: list[tuple[str, bytes]] = []
+    total_bytes = 0
     file_format = detect_format(filename, data)
     if file_format == ArtifactFormat.ZIP:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             for member in archive.infolist():
                 if member.is_dir():
                     continue
-                extracted.append((member.filename, archive.read(member)))
+                content = archive.read(member)
+                total_bytes += len(content)
+                if total_bytes > max_total_bytes:
+                    break
+                extracted.append((_sanitize_member_name(member.filename), content))
     elif file_format == ArtifactFormat.TAR:
         with tarfile.open(fileobj=io.BytesIO(data)) as archive:
             for member in archive.getmembers():
@@ -136,7 +152,11 @@ def maybe_extract_archive(filename: str, data: bytes) -> list[tuple[str, bytes]]
                 handle = archive.extractfile(member)
                 if handle is None:
                     continue
-                extracted.append((member.name, handle.read()))
+                content = handle.read()
+                total_bytes += len(content)
+                if total_bytes > max_total_bytes:
+                    break
+                extracted.append((_sanitize_member_name(member.name), content))
     elif file_format == ArtifactFormat.GZIP:
         name = Path(filename).stem or "unpacked"
         extracted.append((name, gzip.decompress(data)))

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 from .models import ArtifactRecord, BaselineDiff, BaselineRecord
+
+logger = logging.getLogger(__name__)
 
 
 def build_baseline_record(
@@ -68,6 +72,7 @@ def compare_against_baselines(
         if matched
         else f"Artifact diverges from baseline {baseline.product} {baseline.version or ''}".strip()
     )
+    logger.info("Baseline comparison: %s distance=%.4f matched=%s", baseline.product, distance, matched)
     return BaselineDiff(
         baseline_id=baseline.id,
         matched=matched,

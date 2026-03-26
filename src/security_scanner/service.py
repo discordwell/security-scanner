@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
-
 from .baselines import build_baseline_record, compare_against_baselines
 from .models import ArtifactRecord, ExecutionPolicy, ProvenanceBundle, SubmissionRecord, SubmissionStatus, VerdictRecord
 from .pipeline.dynamic_analysis import DynamicAnalysisPipeline
@@ -14,6 +12,8 @@ from .pipeline.static_analysis import StaticAnalysisPipeline
 from .pipeline.symbolic import SymbolicPipeline
 from .repository import JsonRepository
 from .storage import LocalArtifactStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import io
+import zipfile
+
+from security_scanner.models import ExecutionPolicy
+
 
 def test_register_baseline_and_clean_submission(tmp_service, benign_pe_bytes):
     baseline = tmp_service.register_baseline(
@@ -41,3 +46,26 @@ def test_recursive_archive_analysis_uses_child_artifacts(tmp_service, malicious_
     assert result.verdict.state.value == "malicious"
     assert len(result.artifacts) == 2
     assert any(artifact.filename == "hidden.exe" for artifact in result.artifacts)
+
+
+def test_max_depth_zero_does_not_extract_children(tmp_service, malicious_zip):
+    policy = ExecutionPolicy(recursive_unpack_depth=0)
+    result = tmp_service.submit(filename="bundle.zip", data=malicious_zip, policy=policy)
+    assert len(result.artifacts) == 1
+
+
+def test_nested_archive_respects_depth_limit(tmp_service, malicious_pe_bytes):
+    inner_buf = io.BytesIO()
+    with zipfile.ZipFile(inner_buf, "w") as zf:
+        zf.writestr("payload.exe", malicious_pe_bytes)
+    outer_buf = io.BytesIO()
+    with zipfile.ZipFile(outer_buf, "w") as zf:
+        zf.writestr("inner.zip", inner_buf.getvalue())
+
+    policy = ExecutionPolicy(recursive_unpack_depth=1)
+    result = tmp_service.submit(filename="outer.zip", data=outer_buf.getvalue(), policy=policy)
+    # depth=1: outer.zip -> inner.zip extracted, but inner.zip's contents NOT extracted
+    assert len(result.artifacts) == 2
+    filenames = {a.filename for a in result.artifacts}
+    assert "inner.zip" in filenames
+    assert "payload.exe" not in filenames

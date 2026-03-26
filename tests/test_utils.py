@@ -227,6 +227,38 @@ def test_maybe_extract_archive_non_archive():
     assert result == []
 
 
+def test_maybe_extract_archive_empty_zip():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w"):
+        pass
+    result = maybe_extract_archive("empty.zip", buf.getvalue())
+    assert result == []
+
+
+def test_maybe_extract_archive_zip_bomb_stops_at_limit():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("big1.bin", b"A" * 1000)
+        zf.writestr("big2.bin", b"B" * 1000)
+        zf.writestr("big3.bin", b"C" * 1000)
+    result = maybe_extract_archive("bomb.zip", buf.getvalue(), max_total_bytes=1500)
+    assert len(result) == 1
+
+
+def test_maybe_extract_archive_tar_path_traversal_sanitized():
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        info = tarfile.TarInfo(name="../../etc/passwd")
+        content = b"malicious"
+        info.size = len(content)
+        tf.addfile(info, io.BytesIO(content))
+    result = maybe_extract_archive("evil.tar", buf.getvalue())
+    assert len(result) == 1
+    name, _ = result[0]
+    assert ".." not in name
+    assert not name.startswith("/")
+
+
 def test_maybe_extract_archive_zip_with_directories():
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
