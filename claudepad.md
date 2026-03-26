@@ -2,6 +2,18 @@
 
 ## Session Summaries
 
+### 2026-03-26T04:00:00Z
+- Implemented repo analysis: RepoScanner, source heuristic detectors, /analyze skill
+  - 5 source code detectors: obfuscation, suspicious imports, embedded payloads, dependency risks, secrets
+  - RepoScanner walks dirs, classifies files, routes to binary pipeline or source heuristics
+  - CLI: `python -m security_scanner analyze /path` with --format summary/json
+  - /analyze Claude Code skill for interactive AI deep dives with sub-agents
+  - Tested against BlockBlasters extract: MALICIOUS verdict
+  - 189 tests total (29 source analysis + 17 repo scanner + existing)
+- Downloaded real BlockBlasters malware from MalwareBazaar (SHA256: 17c3d4c2...)
+  - MalwareBazaar API key stored in .env (Auth-Key header, not API-KEY)
+  - Scanner correctly identifies it as MALICIOUS via encrypted PyInstaller payload detection
+
 ### 2026-03-26T00:30:00Z
 - Explored MVP codebase built by Codex: FastAPI binary analysis harness with 4 passing tests
 - Initialized public GitHub repo at discordwell/security-scanner

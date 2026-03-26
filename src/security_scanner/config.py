@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379"
     use_task_queue: bool = False
 
+    # Repo analysis
+    repo_max_files: int = 5000
+    repo_max_file_size: int = 10 * 1024 * 1024
+    repo_skip_dirs: list[str] = [".git", ".svn", ".hg", "node_modules", "__pycache__", ".venv", "venv", ".tox", "dist", "build"]
+
     # Auth & security
     require_auth: bool = False
     global_rate_limit: int = 120

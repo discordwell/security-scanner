@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from pathlib import Path
 
 
 def cmd_serve(args):
@@ -42,6 +43,54 @@ def cmd_migrate(args):
     command.upgrade(alembic_cfg, "head")
 
 
+def cmd_analyze(args):
+    from .logging_config import setup_logging
+    from .repo_scanner import RepoScanner
+    from .service import AnalysisService
+
+    async def run():
+        setup_logging()
+        scanner = RepoScanner(analysis_service=AnalysisService())
+        repo_path = Path(args.path).resolve()
+        if not repo_path.is_dir():
+            print(f"Error: {repo_path} is not a directory", file=sys.stderr)
+            sys.exit(1)
+
+        report = await scanner.scan(repo_path)
+
+        if args.format == "summary":
+            _print_summary(report)
+        else:
+            output = report.model_dump_json(indent=2)
+            if args.output:
+                Path(args.output).write_text(output)
+                print(f"Report written to {args.output}", file=sys.stderr)
+            else:
+                print(output)
+
+    asyncio.run(run())
+
+
+def _print_summary(report):
+    from collections import Counter
+    print(f"Repository: {report.repo_path}")
+    print(f"Verdict:    {report.aggregate_verdict.value.upper()}")
+    print(f"Files:      {report.file_count}")
+    print(f"Summary:    {report.risk_summary}")
+    print()
+
+    sev = Counter(o.severity.value for o in report.top_findings)
+    for s in ["critical", "high", "medium", "low", "info"]:
+        if sev.get(s):
+            print(f"  {s.upper()}: {sev[s]}")
+
+    if report.top_findings:
+        print()
+        print("Top findings:")
+        for obs in report.top_findings[:15]:
+            print(f"  [{obs.severity.value.upper():8s}] {obs.message[:120]}")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="security-scanner")
     sub = parser.add_subparsers(dest="command")
@@ -58,6 +107,11 @@ def main():
 
     sub.add_parser("migrate", help="Run database migrations")
 
+    analyze = sub.add_parser("analyze", help="Analyze a repository directory")
+    analyze.add_argument("path", help="Path to the repository directory")
+    analyze.add_argument("--output", "-o", help="Output JSON report to file")
+    analyze.add_argument("--format", choices=["json", "summary"], default="summary", help="Output format")
+
     args = parser.parse_args()
     if args.command == "serve":
         cmd_serve(args)
@@ -65,6 +119,8 @@ def main():
         cmd_create_key(args)
     elif args.command == "migrate":
         cmd_migrate(args)
+    elif args.command == "analyze":
+        cmd_analyze(args)
     else:
         parser.print_help()
         sys.exit(1)

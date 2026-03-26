@@ -195,6 +195,36 @@ class BaselineRecord(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class FileClassification(str, Enum):
+    BINARY = "binary"
+    SOURCE = "source"
+    CONFIG = "config"
+    SCRIPT = "script"
+    UNKNOWN = "unknown"
+
+
+class RepoFileRecord(BaseModel):
+    path: str
+    classification: FileClassification
+    size: int
+    sha256: str
+    observations: list[Observation] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RepoReport(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    repo_path: str
+    scanned_at: datetime = Field(default_factory=utc_now)
+    file_count: int = 0
+    files: list[RepoFileRecord] = Field(default_factory=list)
+    binary_verdicts: list[VerdictRecord] = Field(default_factory=list)
+    aggregate_verdict: VerdictState = VerdictState.INCONCLUSIVE
+    risk_summary: str = ""
+    top_findings: list[Observation] = Field(default_factory=list)
+    statistics: dict[str, Any] = Field(default_factory=dict)
+
+
 class StateSnapshot(BaseModel):
     artifacts: dict[str, ArtifactRecord] = Field(default_factory=dict)
     submissions: dict[str, SubmissionRecord] = Field(default_factory=dict)

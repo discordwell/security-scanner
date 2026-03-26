@@ -148,6 +148,29 @@ When `angr` is installed (`pip install angr`) and `enable_symbolic_execution=tru
 
 Falls back to a placeholder stub when angr is not installed.
 
+## Repository Analysis
+
+The scanner can analyze entire directory trees, not just individual binaries:
+
+```bash
+# CLI (headless, automated heuristics)
+uv run python -m security_scanner analyze /path/to/repo --format summary
+
+# Claude Code skill (interactive, AI-guided deep dive)
+/analyze /path/to/repo
+```
+
+**RepoScanner** (`repo_scanner.py`) walks a directory, classifies files (binary/source/config/script), routes binaries through the existing `AnalysisService.submit()` pipeline, and routes source through `source_analysis.py` heuristic detectors.
+
+**Source heuristic detectors** (`source_analysis.py`):
+- Obfuscation: base64 blobs, hex strings, eval/exec, packed JS, `_0x` variable naming
+- Suspicious imports: subprocess+socket combos, hardcoded IPs, crypto wallet addresses
+- Embedded payloads: PE/ELF headers in source, shellcode hex, long encoded strings
+- Dependency risks: typosquatting detection (Levenshtein), malicious post-install scripts
+- Secrets: AWS keys, private keys, GitHub tokens, API keys
+
+The `/analyze` Claude Code skill (`.claude/commands/analyze.md`) orchestrates: automated scan → AI triage → sub-agent deep dives → kill chain reconstruction → final report.
+
 ## Deployment
 
 ```bash
@@ -162,6 +185,9 @@ uv run python -m security_scanner create-key --name "my-key" --scopes submit,rea
 
 # Run migrations
 uv run python -m security_scanner migrate
+
+# Analyze a repository
+uv run python -m security_scanner analyze /path/to/suspicious/repo
 ```
 
 ## CI
