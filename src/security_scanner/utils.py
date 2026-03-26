@@ -3,13 +3,18 @@ from __future__ import annotations
 import gzip
 import hashlib
 import io
+import logging
 import math
 import re
+import struct
 import tarfile
+import zlib
 import zipfile
 from pathlib import Path
 
 from .models import ArtifactFormat
+
+logger = logging.getLogger(__name__)
 
 PRINTABLE_RE = re.compile(rb"[\x20-\x7e]{4,}")
 
@@ -31,6 +36,13 @@ SUSPICIOUS_PATTERNS: dict[bytes, tuple[str, str]] = {
     b"ptrace": ("anti_analysis", "Debugger detection"),
     b"mach_vm_write": ("memory_exec", "Mach VM write"),
 }
+
+# PyInstaller archive magic (COOKIE)
+_PYINST_MAGIC = b"MEI\014\013\012\013\016"
+# Cookie struct: magic(8) + package_len(4) + toc_offset(4) + toc_len(4) + pyver(4) + pylib(64)
+_PYINST_COOKIE_LEN = 88
+# TOC entry: entry_len(4) + data_offset(4) + data_len(4) + compress(1) + typecode(1) + name(variable)
+_PYINST_TOC_HEADER = struct.Struct("!IIIbb")
 
 
 def hash_bytes(data: bytes) -> tuple[str, str, str]:
@@ -74,7 +86,9 @@ def detect_format(filename: str, data: bytes) -> ArtifactFormat:
         return ArtifactFormat.ELF
     if data.startswith((b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe")):
         return ArtifactFormat.MACH_O
-    if data.startswith(b"PK\x03\x04") or lower_name.endswith(".zip"):
+    if data.startswith(b"PK\x03\x04") and not lower_name.endswith((".dll", ".pyd", ".exe", ".so")):
+        return ArtifactFormat.ZIP
+    if lower_name.endswith(".zip") and not data.startswith(b"MZ"):
         return ArtifactFormat.ZIP
     if _is_tar_archive(data):
         return ArtifactFormat.TAR
@@ -89,6 +103,77 @@ def _is_tar_archive(data: bytes) -> bool:
             return True
     except tarfile.TarError:
         return False
+
+
+def is_pyinstaller(data: bytes) -> bool:
+    """Check if a PE contains an embedded PyInstaller archive."""
+    return data.rfind(_PYINST_MAGIC) != -1
+
+
+def _extract_pyinstaller(data: bytes, max_total_bytes: int) -> list[tuple[str, bytes]]:
+    """Extract files from a PyInstaller CArchive embedded in a PE."""
+    magic_offset = data.rfind(_PYINST_MAGIC)
+    if magic_offset == -1:
+        return []
+
+    # Parse the cookie
+    cookie_start = magic_offset
+    if cookie_start + _PYINST_COOKIE_LEN > len(data):
+        return []
+
+    cookie = data[cookie_start : cookie_start + _PYINST_COOKIE_LEN]
+    # magic(8) + pkg_len(4) + toc_offset(4) + toc_len(4) + pyver(4) + pylib(64)
+    pkg_len = struct.unpack("!I", cookie[8:12])[0]
+    toc_offset = struct.unpack("!I", cookie[12:16])[0]
+    toc_len = struct.unpack("!I", cookie[16:20])[0]
+    pyver = struct.unpack("!I", cookie[20:24])[0]
+
+    # The package starts at (cookie_end - pkg_len)
+    pkg_end = cookie_start + _PYINST_COOKIE_LEN
+    pkg_start = pkg_end - pkg_len
+
+    if pkg_start < 0 or toc_offset > pkg_len:
+        return []
+
+    abs_toc = pkg_start + toc_offset
+
+    extracted: list[tuple[str, bytes]] = []
+    total_bytes = 0
+    pos = abs_toc
+
+    while pos < abs_toc + toc_len and pos + _PYINST_TOC_HEADER.size <= len(data):
+        entry_len, data_offset, data_len, compress, typecode = _PYINST_TOC_HEADER.unpack_from(data, pos)
+
+        if entry_len < _PYINST_TOC_HEADER.size or entry_len > 4096:
+            break
+
+        name_bytes = data[pos + _PYINST_TOC_HEADER.size : pos + entry_len]
+        name = name_bytes.rstrip(b"\x00").decode("utf-8", errors="replace")
+        if not name:
+            name = f"entry_{len(extracted)}"
+
+        abs_data_offset = pkg_start + data_offset
+
+        if abs_data_offset + data_len <= len(data) and data_len > 0:
+            raw = data[abs_data_offset : abs_data_offset + data_len]
+            if compress == 1:
+                try:
+                    raw = zlib.decompress(raw)
+                except zlib.error:
+                    pass
+
+            total_bytes += len(raw)
+            if total_bytes > max_total_bytes:
+                break
+
+            # Skip tiny entries and the manifest/cookie itself
+            if len(raw) > 16:
+                extracted.append((_sanitize_member_name(name), raw))
+
+        pos += entry_len
+
+    logger.info("PyInstaller: extracted %d files (pyver=%d)", len(extracted), pyver)
+    return extracted
 
 
 def chunk_hashes(data: bytes, chunk_size: int = 4096) -> list[str]:
@@ -134,8 +219,17 @@ def maybe_extract_archive(
     extracted: list[tuple[str, bytes]] = []
     total_bytes = 0
     file_format = detect_format(filename, data)
+
+    # Check for PyInstaller inside PE/ELF binaries
+    if file_format in (ArtifactFormat.PE, ArtifactFormat.ELF) and is_pyinstaller(data):
+        return _extract_pyinstaller(data, max_total_bytes)
+
     if file_format == ArtifactFormat.ZIP:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        try:
+            archive_obj = zipfile.ZipFile(io.BytesIO(data))
+        except zipfile.BadZipFile:
+            return extracted
+        with archive_obj as archive:
             for member in archive.infolist():
                 if member.is_dir():
                     continue

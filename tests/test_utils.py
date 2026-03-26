@@ -259,6 +259,19 @@ def test_maybe_extract_archive_tar_path_traversal_sanitized():
     assert not name.startswith("/")
 
 
+def test_is_pyinstaller_detects_magic():
+    from security_scanner.utils import is_pyinstaller, _PYINST_MAGIC
+    # Simulate a PE with PyInstaller magic near the end
+    fake_pe = b"MZ" + b"\x00" * 1000 + _PYINST_MAGIC + b"\x00" * 80
+    assert is_pyinstaller(fake_pe) is True
+
+
+def test_is_pyinstaller_false_for_normal_pe():
+    from security_scanner.utils import is_pyinstaller
+    normal_pe = b"MZ" + b"\x00" * 1000
+    assert is_pyinstaller(normal_pe) is False
+
+
 def test_maybe_extract_archive_zip_with_directories():
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:

@@ -7,3 +7,4 @@ data/runtime/state.json
 data/artifacts/
 .coverage
 *.db
+.env
