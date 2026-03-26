@@ -3,11 +3,14 @@ from __future__ import annotations
 import io
 import zipfile
 
+import pytest
+
 from security_scanner.models import ExecutionPolicy
 
 
-def test_register_baseline_and_clean_submission(tmp_service, benign_pe_bytes):
-    baseline = tmp_service.register_baseline(
+@pytest.mark.asyncio
+async def test_register_baseline_and_clean_submission(tmp_service, benign_pe_bytes):
+    baseline = await tmp_service.register_baseline(
         filename="word.exe",
         data=benign_pe_bytes,
         product="Word",
@@ -15,7 +18,7 @@ def test_register_baseline_and_clean_submission(tmp_service, benign_pe_bytes):
         signer="Microsoft Corporation",
     )
 
-    result = tmp_service.submit(
+    result = await tmp_service.submit(
         filename="word.exe",
         data=benign_pe_bytes,
         claimed_product="Word",
@@ -28,8 +31,9 @@ def test_register_baseline_and_clean_submission(tmp_service, benign_pe_bytes):
     assert result.verdict.pending_actions == []
 
 
-def test_malicious_strings_force_malicious_verdict(tmp_service, malicious_pe_bytes):
-    result = tmp_service.submit(
+@pytest.mark.asyncio
+async def test_malicious_strings_force_malicious_verdict(tmp_service, malicious_pe_bytes):
+    result = await tmp_service.submit(
         filename="payload.exe",
         data=malicious_pe_bytes,
         provenance_bundle={"claimed_signer": "Unknown Vendor"},
@@ -40,21 +44,24 @@ def test_malicious_strings_force_malicious_verdict(tmp_service, malicious_pe_byt
     assert result.verdict.pending_actions
 
 
-def test_recursive_archive_analysis_uses_child_artifacts(tmp_service, malicious_zip):
-    result = tmp_service.submit(filename="bundle.zip", data=malicious_zip)
+@pytest.mark.asyncio
+async def test_recursive_archive_analysis_uses_child_artifacts(tmp_service, malicious_zip):
+    result = await tmp_service.submit(filename="bundle.zip", data=malicious_zip)
 
     assert result.verdict.state.value == "malicious"
     assert len(result.artifacts) == 2
     assert any(artifact.filename == "hidden.exe" for artifact in result.artifacts)
 
 
-def test_max_depth_zero_does_not_extract_children(tmp_service, malicious_zip):
+@pytest.mark.asyncio
+async def test_max_depth_zero_does_not_extract_children(tmp_service, malicious_zip):
     policy = ExecutionPolicy(recursive_unpack_depth=0)
-    result = tmp_service.submit(filename="bundle.zip", data=malicious_zip, policy=policy)
+    result = await tmp_service.submit(filename="bundle.zip", data=malicious_zip, policy=policy)
     assert len(result.artifacts) == 1
 
 
-def test_nested_archive_respects_depth_limit(tmp_service, malicious_pe_bytes):
+@pytest.mark.asyncio
+async def test_nested_archive_respects_depth_limit(tmp_service, malicious_pe_bytes):
     inner_buf = io.BytesIO()
     with zipfile.ZipFile(inner_buf, "w") as zf:
         zf.writestr("payload.exe", malicious_pe_bytes)
@@ -63,8 +70,7 @@ def test_nested_archive_respects_depth_limit(tmp_service, malicious_pe_bytes):
         zf.writestr("inner.zip", inner_buf.getvalue())
 
     policy = ExecutionPolicy(recursive_unpack_depth=1)
-    result = tmp_service.submit(filename="outer.zip", data=outer_buf.getvalue(), policy=policy)
-    # depth=1: outer.zip -> inner.zip extracted, but inner.zip's contents NOT extracted
+    result = await tmp_service.submit(filename="outer.zip", data=outer_buf.getvalue(), policy=policy)
     assert len(result.artifacts) == 2
     filenames = {a.filename for a in result.artifacts}
     assert "inner.zip" in filenames

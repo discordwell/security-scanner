@@ -64,7 +64,7 @@ async def create_submission(
         claimed_signer=claimed_signer,
         authenticode_trusted=authenticode_trusted,
     )
-    result = service.submit(
+    result = await service.submit(
         filename=file.filename or "sample.bin",
         data=payload,
         policy=policy,
@@ -79,24 +79,24 @@ async def create_submission(
 
 
 @app.get("/submissions/{submission_id}")
-def get_submission(submission_id: str, service: AnalysisService = Depends(get_service)):
-    submission = service.get_submission(submission_id)
+async def get_submission(submission_id: str, service: AnalysisService = Depends(get_service)):
+    submission = await service.get_submission(submission_id)
     if submission is None:
         raise HTTPException(status_code=404, detail="Submission not found.")
     return submission
 
 
 @app.get("/artifacts/{sha256}")
-def get_artifact(sha256: str, service: AnalysisService = Depends(get_service)):
-    artifact = service.get_artifact(sha256)
+async def get_artifact(sha256: str, service: AnalysisService = Depends(get_service)):
+    artifact = await service.get_artifact(sha256)
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found.")
     return artifact
 
 
 @app.get("/verdicts/{sha256}")
-def get_verdict(sha256: str, service: AnalysisService = Depends(get_service)):
-    verdict = service.get_verdict(sha256)
+async def get_verdict(sha256: str, service: AnalysisService = Depends(get_service)):
+    verdict = await service.get_verdict(sha256)
     if verdict is None:
         raise HTTPException(status_code=404, detail="Verdict not found.")
     return verdict
@@ -113,7 +113,7 @@ async def create_baseline(
     payload = await file.read()
     if not payload:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    baseline = service.register_baseline(
+    baseline = await service.register_baseline(
         filename=file.filename or Path(product).name,
         data=payload,
         product=product,

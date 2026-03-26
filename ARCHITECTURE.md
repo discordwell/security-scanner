@@ -92,10 +92,17 @@ src/security_scanner/
 ## Storage
 
 - **Artifacts**: Content-addressed file store under `data/artifacts/{sha256}/blob`.
-- **State**: Single JSON file at `data/runtime/state.json` holding submissions, verdicts, artifacts, and baselines.
-- **Thread Safety**: `JsonRepository` uses `RLock` and atomic temp-file writes.
+- **State**: Dual-backend via `Repository` protocol:
+  - `JsonRepository` -- single JSON file at `data/runtime/state.json` (thread-safe via `RLock`, for local dev)
+  - `SqlRepository` -- SQLAlchemy async with SQLite (`aiosqlite`) or PostgreSQL (`asyncpg`)
+- **Migrations**: Alembic for schema management (`src/security_scanner/migrations/`)
+- **Config**: `pydantic-settings` `BaseSettings` with `SCANNER_` env prefix (e.g. `SCANNER_DATABASE_URL`)
 
-The interfaces are structured so that NATS/PostgreSQL/MinIO-backed implementations can replace the local file-backed ones.
+## Async Architecture
+
+The `AnalysisService` is fully async. CPU-bound pipeline stages (ingest, static analysis) are dispatched via `asyncio.to_thread`. The `_RepoAdapter` wraps both sync (`JsonRepository`) and async (`SqlRepository`) backends with a uniform async interface.
+
+Optional arq worker (`src/security_scanner/worker.py`) enables background task processing when `SCANNER_USE_TASK_QUEUE=true` and Redis is available.
 
 ## Verdict Logic (Fusion)
 

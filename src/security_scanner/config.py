@@ -3,10 +3,13 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseModel):
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="SCANNER_", env_file=".env", extra="ignore")
+
     project_root: Path = Field(default_factory=lambda: Path.cwd())
     data_dir: Path = Field(default_factory=lambda: Path.cwd() / "data")
     artifact_dir: Path = Field(default_factory=lambda: Path.cwd() / "data" / "artifacts")
@@ -26,6 +29,13 @@ class Settings(BaseModel):
     ghidra_project_dir: Path = Field(default_factory=lambda: Path.cwd() / "data" / "ghidra_projects")
     ghidra_timeout: int = 300
     ghidra_max_functions: int = 50
+
+    # Database
+    database_url: str = "sqlite+aiosqlite:///data/runtime/scanner.db"
+
+    # Task queue
+    redis_url: str = "redis://localhost:6379"
+    use_task_queue: bool = False
 
     def ensure_directories(self) -> None:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
