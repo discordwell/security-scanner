@@ -608,6 +608,7 @@ def detect_behavioral_patterns(content: str, path: str) -> list[Observation]:
 # --- Indirect exec detection (top 3 variants, not exhaustive) ---
 
 _GETATTR_BUILTINS_RE = re.compile(r'getattr\s*\(\s*(?:__builtins__|builtins)\s*,')
+_GETATTR_CONCAT_RE = re.compile(r"getattr\s*\(\s*(?:__builtins__|builtins)\s*,\s*['\"][^'\"]*['\"]\s*\+")
 _GLOBALS_EXEC_RE = re.compile(r'(?:globals|vars)\s*\(\s*(?:__builtins__|builtins)?\s*\)\s*\[')
 _JS_GLOBAL_COMPUTED_RE = re.compile(r'global\s*\[')
 
@@ -616,8 +617,28 @@ def detect_indirect_exec(content: str, path: str) -> list[Observation]:
     """Detect common indirect function resolution patterns."""
     obs: list[Observation] = []
 
+    # Special case: getattr(__builtins__, 'ex' + 'ec') -- string concat is the tell
+    # No legitimate code splits builtin function names. This is HIGH, not MEDIUM.
+    if _GETATTR_CONCAT_RE.search(content):
+        obs.append(Observation(
+            source="source-heuristic",
+            category="obfuscation:indirect_exec:getattr_concat",
+            severity=ObservationSeverity.HIGH,
+            message=f"getattr(__builtins__, <string concatenation>) in {path} -- splits a builtin name to evade static analysis. No legitimate use case.",
+            evidence={"path": path, "pattern": "getattr_concat"},
+            tags=["source", "obfuscation", "indirect_exec", "getattr_concat"],
+        ))
+    elif _GETATTR_BUILTINS_RE.search(content):
+        obs.append(Observation(
+            source="source-heuristic",
+            category="obfuscation:indirect_exec:getattr_builtins",
+            severity=ObservationSeverity.MEDIUM,
+            message=f"Indirect function resolution via getattr() on __builtins__ in {path} -- commonly used to hide exec/eval calls from static analysis.",
+            evidence={"path": path, "pattern": "getattr_builtins"},
+            tags=["source", "obfuscation", "indirect_exec", "getattr_builtins"],
+        ))
+
     for pattern, name, tag in [
-        (_GETATTR_BUILTINS_RE, "getattr() on __builtins__", "getattr_builtins"),
         (_GLOBALS_EXEC_RE, "Dictionary access to builtins (globals/vars)", "dict_builtins"),
         (_JS_GLOBAL_COMPUTED_RE, "Computed global property access", "global_computed"),
     ]:
@@ -647,4 +668,19 @@ def analyze_source(content: str, path: str, classification: FileClassification) 
     observations.extend(detect_indirect_exec(content, path))
     if classification == FileClassification.CONFIG:
         observations.extend(detect_dependency_risks(content, path))
+
+    # Compound escalation: behavioral credential theft + indirect exec = MALICIOUS intent
+    categories = {o.category for o in observations}
+    has_behavioral = any(c.startswith("behavioral:credential_access") for c in categories)
+    has_indirect_exec = any(c.startswith("obfuscation:indirect_exec") for c in categories)
+    if has_behavioral and has_indirect_exec:
+        observations.append(Observation(
+            source="source-heuristic",
+            category="compound:credential_theft_with_evasion",
+            severity=ObservationSeverity.HIGH,
+            message=f"Credential theft with exec evasion in {path}: reads sensitive files AND hides execution via indirect function resolution. This combination has no legitimate use case.",
+            evidence={"path": path, "behavioral": True, "indirect_exec": True},
+            tags=["source", "compound", "credential_theft", "evasion"],
+        ))
+
     return observations

