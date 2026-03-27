@@ -150,6 +150,37 @@ eval(compile(base64.b64decode(payload).decode('utf-8'), '<string>', bytes.fromhe
     assert "obfuscation:hex_escape" in categories or any("obfuscation" in c for c in categories)
 
 
+def test_detect_invisible_unicode_payload():
+    """GlassWorm: invisible Unicode variation selectors + eval"""
+    # Build a string with many invisible variation selector chars
+    invisible = "\uFE01\uFE02\uFE03\uFE04\uFE05" * 20  # 100 invisible chars
+    content = f'const d=s=>[...s].map(c=>(c=c.codePointAt(0),c>=0xFE00&&c<=0xFE0F?c-0xFE00:null));eval(Buffer.from(d(`{invisible}`)).toString("utf-8"));'
+    obs = detect_obfuscation(content, "extension.js")
+    categories = [o.category for o in obs]
+    assert "obfuscation:invisible_unicode" in categories
+    assert "obfuscation:unicode_decoder" in categories
+    # Should be CRITICAL when combined with eval + decoder
+    critical = [o for o in obs if o.severity == ObservationSeverity.CRITICAL]
+    assert len(critical) >= 1
+
+
+def test_detect_invisible_unicode_without_eval():
+    """Invisible chars without eval should still be HIGH"""
+    invisible = "\uFE01\uFE02\uFE03" * 30  # 90 invisible chars
+    content = f'const data = `{invisible}`;'
+    obs = detect_obfuscation(content, "data.js")
+    unicode_obs = [o for o in obs if o.category == "obfuscation:invisible_unicode"]
+    assert len(unicode_obs) == 1
+    assert unicode_obs[0].severity == ObservationSeverity.HIGH
+
+
+def test_few_invisible_chars_not_flagged():
+    """Small number of variation selectors (normal Unicode) shouldn't flag"""
+    content = 'const emoji = "👋\uFE0F";'  # Just one variation selector (normal)
+    obs = detect_obfuscation(content, "app.js")
+    assert not any("invisible_unicode" in o.category for o in obs)
+
+
 def test_clean_source_no_obfuscation():
     content = "def hello():\n    print('Hello, world!')\n"
     obs = detect_obfuscation(content, "clean.py")

@@ -22,6 +22,11 @@ _ATOB_RE = re.compile(r'\batob\s*\(')
 _JS_OBFUSC_VAR_RE = re.compile(r'\b_0x[0-9a-f]{4,}\b')
 _PACKED_JS_RE = re.compile(r'eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*[dr]\s*\)')
 
+# Invisible Unicode payload (GlassWorm) -- variation selectors and PUA characters
+_UNICODE_VARIATION_SELECTOR_RE = re.compile(r'[\uFE00-\uFE0F]')
+_UNICODE_PUA_SUPPLEMENT_RE = re.compile(r'[\U000E0100-\U000E01EF]')
+_CODEPOINT_DECODER_RE = re.compile(r'codePointAt\s*\(.*?0x[Ff][Ee]00')
+
 # Dynamic import + deobfuscation + exec patterns (Python malware staple)
 _DUNDER_IMPORT_RE = re.compile(r"__import__\s*\(\s*['\"](\w+)['\"]\s*\)")
 _EXEC_COMPILE_RE = re.compile(r'exec\s*\(\s*compile\s*\(')
@@ -76,6 +81,35 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
                 tags=["source", "obfuscation", tag],
             ))
             indicators += 1
+
+    # --- Invisible Unicode payload (GlassWorm) ---
+    vs_count = len(_UNICODE_VARIATION_SELECTOR_RE.findall(content))
+    pua_count = len(_UNICODE_PUA_SUPPLEMENT_RE.findall(content))
+    invisible_chars = vs_count + pua_count
+    has_codepoint_decoder = bool(_CODEPOINT_DECODER_RE.search(content))
+
+    if invisible_chars > 50:
+        severity = ObservationSeverity.HIGH
+        if has_codepoint_decoder or _EVAL_EXEC_RE.search(content):
+            severity = ObservationSeverity.CRITICAL
+        obs.append(Observation(
+            source="source-heuristic", category="obfuscation:invisible_unicode",
+            severity=severity,
+            message=f"Invisible Unicode payload detected in {path}: {invisible_chars} hidden characters (variation selectors / PUA). Code is literally invisible to editors but executable by JavaScript interpreters.",
+            evidence={"path": path, "invisible_chars": invisible_chars, "variation_selectors": vs_count, "pua_chars": pua_count, "has_decoder": has_codepoint_decoder},
+            tags=["source", "obfuscation", "invisible_unicode", "glassworm"],
+        ))
+        indicators += 1
+
+    if has_codepoint_decoder:
+        obs.append(Observation(
+            source="source-heuristic", category="obfuscation:unicode_decoder",
+            severity=ObservationSeverity.HIGH,
+            message=f"Unicode variation selector decoder (codePointAt + 0xFE00) in {path} -- GlassWorm-style invisible code execution pattern.",
+            evidence={"path": path},
+            tags=["source", "obfuscation", "unicode_decoder", "glassworm"],
+        ))
+        indicators += 1
 
     # --- Dynamic __import__ deobfuscation chain (Python malware staple) ---
     dunder_imports = _DUNDER_IMPORT_RE.findall(content)
