@@ -534,6 +534,106 @@ def detect_secrets(content: str, path: str) -> list[Observation]:
     return obs
 
 
+# --- Behavioral pattern detection (intent, not mechanism) ---
+
+# Sensitive file paths that credential stealers target
+_SENSITIVE_PATH_RE = re.compile(
+    r'(?:expanduser|homedir|HOME|USERPROFILE|home_?dir)'
+    r'.*?'
+    r'(?:\.ssh|\.aws|\.npmrc|\.gitconfig|\.gnupg|\.env\b|\.docker|\.kube|'
+    r'credentials|id_rsa|id_ed25519|\.yarnrc|\.pypirc|\.netrc|'
+    r'Local\s*Storage|cookies\.sqlite|Login\s*Data|\.config/gh)',
+    re.IGNORECASE | re.DOTALL,
+)
+# Direct path string references
+_SENSITIVE_LITERAL_RE = re.compile(
+    r'''['"]((?:~/|/home/|%USERPROFILE%)[^'"]*?(?:\.ssh|\.aws|\.npmrc|\.gitconfig|\.env|\.docker|\.kube|credentials|id_rsa|\.yarnrc|\.pypirc))['"]''',
+    re.IGNORECASE,
+)
+
+# Network exfiltration methods
+_EXFIL_PYTHON_RE = re.compile(
+    r'(?:urlopen|urllib\.request\.Request|requests\.(?:post|get|put|send)|'
+    r'httpx\.(?:post|get|put)|http\.client\.HTTP|socket\.connect)',
+)
+_EXFIL_JS_RE = re.compile(
+    r'(?:https?\.request|\.fetch\(|XMLHttpRequest|'
+    r'execSync\s*\(.*?(?:curl|wget)|axios\.(?:post|get|put))',
+    re.DOTALL,
+)
+
+
+def detect_behavioral_patterns(content: str, path: str) -> list[Observation]:
+    """Detect operational intent: reading sensitive files + exfiltrating data."""
+    obs: list[Observation] = []
+
+    # Find sensitive file access
+    sensitive_hits = _SENSITIVE_PATH_RE.findall(content)
+    literal_hits = _SENSITIVE_LITERAL_RE.findall(content)
+    all_sensitive = sensitive_hits + literal_hits
+
+    # Find network exfiltration
+    exfil_hits = _EXFIL_PYTHON_RE.findall(content) + _EXFIL_JS_RE.findall(content)
+
+    if all_sensitive and exfil_hits:
+        # Compound: reads sensitive files AND transmits data
+        sensitive_summary = ", ".join(set(h[:40] for h in all_sensitive[:5]))
+        exfil_summary = ", ".join(set(h[:30] for h in exfil_hits[:3]))
+        obs.append(Observation(
+            source="source-heuristic",
+            category="behavioral:credential_access_exfil",
+            severity=ObservationSeverity.MEDIUM,
+            message=f"Behavioral pattern in {path}: accesses sensitive files ({sensitive_summary}) and transmits data externally ({exfil_summary}). Characteristic of credential theft.",
+            evidence={
+                "path": path,
+                "sensitive_paths": list(set(h[:60] for h in all_sensitive[:10])),
+                "exfil_methods": list(set(h[:40] for h in exfil_hits[:5])),
+            },
+            tags=["source", "behavioral", "credential_theft"],
+        ))
+    elif all_sensitive and len(all_sensitive) >= 3:
+        # Bulk sensitive file access without obvious exfil (might use indirect method)
+        obs.append(Observation(
+            source="source-heuristic",
+            category="behavioral:bulk_credential_access",
+            severity=ObservationSeverity.MEDIUM,
+            message=f"Bulk sensitive file access in {path}: reads {len(all_sensitive)} credential paths.",
+            evidence={"path": path, "sensitive_paths": list(set(h[:60] for h in all_sensitive[:10]))},
+            tags=["source", "behavioral", "credential_access"],
+        ))
+
+    return obs
+
+
+# --- Indirect exec detection (top 3 variants, not exhaustive) ---
+
+_GETATTR_BUILTINS_RE = re.compile(r'getattr\s*\(\s*(?:__builtins__|builtins)\s*,')
+_GLOBALS_EXEC_RE = re.compile(r'(?:globals|vars)\s*\(\s*(?:__builtins__|builtins)?\s*\)\s*\[')
+_JS_GLOBAL_COMPUTED_RE = re.compile(r'global\s*\[')
+
+
+def detect_indirect_exec(content: str, path: str) -> list[Observation]:
+    """Detect common indirect function resolution patterns."""
+    obs: list[Observation] = []
+
+    for pattern, name, tag in [
+        (_GETATTR_BUILTINS_RE, "getattr() on __builtins__", "getattr_builtins"),
+        (_GLOBALS_EXEC_RE, "Dictionary access to builtins (globals/vars)", "dict_builtins"),
+        (_JS_GLOBAL_COMPUTED_RE, "Computed global property access", "global_computed"),
+    ]:
+        if pattern.search(content):
+            obs.append(Observation(
+                source="source-heuristic",
+                category=f"obfuscation:indirect_exec:{tag}",
+                severity=ObservationSeverity.MEDIUM,
+                message=f"Indirect function resolution via {name} in {path} -- commonly used to hide exec/eval calls from static analysis.",
+                evidence={"path": path, "pattern": tag},
+                tags=["source", "obfuscation", "indirect_exec", tag],
+            ))
+
+    return obs
+
+
 # --- Orchestrator ---
 
 def analyze_source(content: str, path: str, classification: FileClassification) -> list[Observation]:
@@ -543,6 +643,8 @@ def analyze_source(content: str, path: str, classification: FileClassification) 
     observations.extend(detect_suspicious_imports(content, path))
     observations.extend(detect_embedded_payloads(content, path))
     observations.extend(detect_secrets(content, path))
+    observations.extend(detect_behavioral_patterns(content, path))
+    observations.extend(detect_indirect_exec(content, path))
     if classification == FileClassification.CONFIG:
         observations.extend(detect_dependency_risks(content, path))
     return observations

