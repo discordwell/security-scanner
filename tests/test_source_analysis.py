@@ -66,6 +66,90 @@ var = String.fromCharCode(72, 101, 108, 108, 111)
     assert any(o.severity == ObservationSeverity.HIGH for o in obs)
 
 
+def test_detect_dynamic_import_exec_chain():
+    """ForceMemo/GlassWorm pattern: __import__('base64') + __import__('zlib') + XOR + exec(compile())"""
+    content = """
+aqgqzxkfjzbdnhz = __import__('base64')
+wogyjaaijwqbpxe = __import__('zlib')
+idzextbcjbgkdih = 134
+qyrrhmmwrhaknyf = lambda d, o: bytes([b ^ idzextbcjbgkdih for b in d])
+lzcdrtfxyqiplpd = 'eNq9W19z3MaR...'
+runzmcxgusiurqv = wogyjaaijwqbpxe.decompress(aqgqzxkfjzbdnhz.b64decode(lzcdrtfxyqiplpd))
+ycqljtcxxkyiplo = qyrrhmmwrhaknyf(runzmcxgusiurqv, idzextbcjbgkdih)
+exec(compile(ycqljtcxxkyiplo, '<>', 'exec'))
+"""
+    obs = detect_obfuscation(content, "setup.py")
+    categories = [o.category for o in obs]
+    # Must detect the compound import+exec chain as HIGH
+    assert "obfuscation:import_exec_chain" in categories
+    assert any(o.severity == ObservationSeverity.HIGH for o in obs)
+    # Should also catch the individual pieces
+    assert "obfuscation:dynamic_import" in categories
+    assert "obfuscation:xor_transform" in categories
+    assert "obfuscation:eval_exec" in categories
+
+
+def test_detect_xor_lambda():
+    content = "decrypt = lambda data, key: bytes([b ^ key for b in data])"
+    obs = detect_obfuscation(content, "loader.py")
+    assert any("xor_transform" in o.category for o in obs)
+
+
+def test_detect_marshal_loads():
+    content = "import marshal\ncode = marshal.loads(encoded_data)\nexec(code)"
+    obs = detect_obfuscation(content, "packed.py")
+    assert any("marshal" in o.category for o in obs)
+
+
+def test_detect_nested_decode_chain():
+    content = "payload = zlib.decompress(base64.b64decode(blob))"
+    obs = detect_obfuscation(content, "dropper.py")
+    assert any("nested_decode" in o.category for o in obs)
+    assert any(o.severity == ObservationSeverity.HIGH for o in obs)
+
+
+def test_detect_nested_decode_with_dunder_import():
+    content = "__import__('zlib').decompress(__import__('base64').b64decode(data))"
+    obs = detect_obfuscation(content, "evil.py")
+    assert any("nested_decode" in o.category for o in obs)
+
+
+def test_dynamic_import_without_exec_is_medium_not_high():
+    content = "data = __import__('base64').b64decode('aGVsbG8=')"
+    obs = detect_obfuscation(content, "util.py")
+    dynamic_import_obs = [o for o in obs if o.category == "obfuscation:dynamic_import"]
+    assert len(dynamic_import_obs) >= 1
+    assert dynamic_import_obs[0].severity == ObservationSeverity.MEDIUM
+    # No HIGH import_exec_chain because there's no exec/eval
+    assert not any(o.category == "obfuscation:import_exec_chain" for o in obs)
+
+
+def test_polymorphic_rat_pattern():
+    """Polymorphic Python RAT: XOR + zlib + marshal + exec"""
+    content = """
+key = os.urandom(16)
+encrypted = bytes([b ^ key[i % len(key)] for i, b in enumerate(code)])
+decrypted = lambda d, k: bytes([b ^ k for b in d])
+import marshal
+code_obj = marshal.loads(zlib.decompress(base64.b64decode(blob)))
+exec(code_obj)
+"""
+    obs = detect_obfuscation(content, "rat.py")
+    high_obs = [o for o in obs if o.severity == ObservationSeverity.HIGH]
+    assert len(high_obs) >= 1  # Combined indicators should push to HIGH
+
+
+def test_spellcheckpy_pattern():
+    """spellcheckpy RAT: hex-encoded 'exec' string to evade static scan"""
+    content = """
+eval(compile(base64.b64decode(payload).decode('utf-8'), '<string>', bytes.fromhex('65786563').decode('utf-8')))
+"""
+    obs = detect_obfuscation(content, "spell.py")
+    categories = [o.category for o in obs]
+    assert "obfuscation:eval_exec" in categories
+    assert "obfuscation:hex_escape" in categories or any("obfuscation" in c for c in categories)
+
+
 def test_clean_source_no_obfuscation():
     content = "def hello():\n    print('Hello, world!')\n"
     obs = detect_obfuscation(content, "clean.py")

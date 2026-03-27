@@ -22,6 +22,21 @@ _ATOB_RE = re.compile(r'\batob\s*\(')
 _JS_OBFUSC_VAR_RE = re.compile(r'\b_0x[0-9a-f]{4,}\b')
 _PACKED_JS_RE = re.compile(r'eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*[dr]\s*\)')
 
+# Dynamic import + deobfuscation + exec patterns (Python malware staple)
+_DUNDER_IMPORT_RE = re.compile(r"__import__\s*\(\s*['\"](\w+)['\"]\s*\)")
+_EXEC_COMPILE_RE = re.compile(r'exec\s*\(\s*compile\s*\(')
+_XOR_LAMBDA_RE = re.compile(r'lambda\s+\w+\s*,?\s*\w*\s*:\s*bytes\s*\(\s*\[\s*\w+\s*\^\s*\w+')
+_MARSHAL_LOADS_RE = re.compile(r'marshal\.loads\s*\(')
+_NESTED_DECODE_RE = re.compile(
+    r'(zlib\.decompress|__import__\s*\(\s*[\'"]zlib[\'"]\s*\)\.decompress)\s*\('
+    r'.*?(base64\.b64decode|__import__\s*\(\s*[\'"]base64[\'"]\s*\)\.b64decode)',
+    re.DOTALL,
+)
+_CODECS_DECODE_RE = re.compile(r'codecs\.decode\s*\(.*[\'"]rot.?13[\'"]\s*\)')
+
+# Encoding modules that have no reason to be dynamically imported
+_SUSPICIOUS_DUNDER_MODULES = {"base64", "zlib", "marshal", "codecs", "bz2", "lzma"}
+
 
 def detect_obfuscation(content: str, path: str) -> list[Observation]:
     obs: list[Observation] = []
@@ -61,6 +76,74 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
                 tags=["source", "obfuscation", tag],
             ))
             indicators += 1
+
+    # --- Dynamic __import__ deobfuscation chain (Python malware staple) ---
+    dunder_imports = _DUNDER_IMPORT_RE.findall(content)
+    suspicious_dimports = [m for m in dunder_imports if m in _SUSPICIOUS_DUNDER_MODULES]
+    has_exec_compile = bool(_EXEC_COMPILE_RE.search(content))
+    has_xor_lambda = bool(_XOR_LAMBDA_RE.search(content))
+    has_marshal = bool(_MARSHAL_LOADS_RE.search(content))
+    has_nested_decode = bool(_NESTED_DECODE_RE.search(content))
+    has_codecs_rot = bool(_CODECS_DECODE_RE.search(content))
+
+    if suspicious_dimports:
+        obs.append(Observation(
+            source="source-heuristic", category="obfuscation:dynamic_import",
+            severity=ObservationSeverity.MEDIUM,
+            message=f"Dynamic __import__() of encoding modules in {path}: {', '.join(suspicious_dimports)}.",
+            evidence={"path": path, "modules": suspicious_dimports},
+            tags=["source", "obfuscation", "dynamic_import"],
+        ))
+        indicators += 1
+
+    if has_xor_lambda:
+        obs.append(Observation(
+            source="source-heuristic", category="obfuscation:xor_transform",
+            severity=ObservationSeverity.MEDIUM,
+            message=f"XOR byte-transform lambda in {path} -- classic malware decryption pattern.",
+            evidence={"path": path},
+            tags=["source", "obfuscation", "xor"],
+        ))
+        indicators += 1
+
+    if has_marshal:
+        obs.append(Observation(
+            source="source-heuristic", category="obfuscation:marshal",
+            severity=ObservationSeverity.MEDIUM,
+            message=f"marshal.loads() in {path} -- deserializes Python code objects at runtime.",
+            evidence={"path": path},
+            tags=["source", "obfuscation", "marshal"],
+        ))
+        indicators += 1
+
+    if has_codecs_rot:
+        obs.append(Observation(
+            source="source-heuristic", category="obfuscation:rot13",
+            severity=ObservationSeverity.MEDIUM,
+            message=f"ROT13 codec decoding in {path}.",
+            evidence={"path": path},
+            tags=["source", "obfuscation", "rot13"],
+        ))
+        indicators += 1
+
+    # --- Compound HIGH: __import__ + decode chain + exec (zero legitimate use) ---
+    if suspicious_dimports and (has_exec_compile or _EVAL_EXEC_RE.search(content)):
+        obs.append(Observation(
+            source="source-heuristic", category="obfuscation:import_exec_chain",
+            severity=ObservationSeverity.HIGH,
+            message=f"Dynamic __import__() of {', '.join(suspicious_dimports)} combined with exec/eval/compile in {path} -- this is a malware deobfuscation-and-execute chain with no legitimate use case.",
+            evidence={"path": path, "modules": suspicious_dimports, "has_exec_compile": has_exec_compile, "has_xor": has_xor_lambda},
+            tags=["source", "obfuscation", "import_exec_chain", "malware_pattern"],
+        ))
+
+    if has_nested_decode:
+        obs.append(Observation(
+            source="source-heuristic", category="obfuscation:nested_decode",
+            severity=ObservationSeverity.HIGH,
+            message=f"Nested decode chain (zlib.decompress + base64.b64decode) in {path} -- multi-layer payload deobfuscation.",
+            evidence={"path": path},
+            tags=["source", "obfuscation", "nested_decode", "malware_pattern"],
+        ))
 
     if indicators >= 3:
         obs.append(Observation(
