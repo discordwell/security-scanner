@@ -183,6 +183,16 @@ class RepoScanner:
                     sha256=sha256,
                 ))
 
+        # Cross-file correlation: preinstall hooks pointing to dropper scripts
+        cross_file_obs = self._correlate_preinstall_hooks(files, repo_path)
+        all_observations.extend(cross_file_obs)
+        for obs_item in cross_file_obs:
+            # Attach to the package.json file record
+            for f in files:
+                if f.path.endswith("package.json"):
+                    f.observations.append(obs_item)
+                    break
+
         # Aggregate verdict
         aggregate, risk_summary = self._aggregate_verdict(all_observations, binary_verdicts)
 
@@ -216,6 +226,71 @@ class RepoScanner:
             len(classified), aggregate.value, len(all_observations),
         )
         return report
+
+    def _correlate_preinstall_hooks(
+        self, files: list[RepoFileRecord], repo_path: Path,
+    ) -> list[Observation]:
+        """Cross-file: if a preinstall hook points to a file with dangerous imports, escalate."""
+        import json as json_mod
+        obs: list[Observation] = []
+
+        for f in files:
+            if not f.path.endswith("package.json"):
+                continue
+            try:
+                pkg_data = (repo_path / f.path).read_text()
+                pkg = json_mod.loads(pkg_data)
+            except Exception:
+                continue
+
+            scripts = pkg.get("scripts") or {}
+            for hook in ("preinstall", "postinstall", "preuninstall"):
+                cmd = scripts.get(hook, "")
+                if not cmd:
+                    continue
+                # Extract the target script filename from "node setup_bun.js" etc.
+                parts = cmd.split()
+                target_file = parts[-1] if parts else ""
+                if not target_file.endswith((".js", ".ts", ".sh", ".py")):
+                    continue
+
+                # Find the target file in our scanned files
+                for other in files:
+                    if other.path == target_file or other.path.endswith("/" + target_file):
+                        dangerous_imports = [
+                            o for o in other.observations
+                            if "child_process" in str(o.evidence) or "execSync" in str(o.evidence)
+                            or "subprocess" in str(o.evidence)
+                            or o.category in ("import:suspicious",)
+                        ]
+                        # Check if the script downloads/executes external code
+                        try:
+                            script_content = (repo_path / other.path).read_text()
+                        except Exception:
+                            script_content = ""
+
+                        downloads_code = any(kw in script_content for kw in [
+                            "curl", "wget", "fetch(", "https.get", "http.get",
+                            "execSync", "spawn(", "bun.sh/install", "downloadAndSetup",
+                        ])
+
+                        if dangerous_imports or downloads_code:
+                            obs.append(Observation(
+                                source="repo-correlation",
+                                category="supply_chain:preinstall_dropper",
+                                severity=ObservationSeverity.HIGH,
+                                message=f"Preinstall hook '{hook}' in {f.path} executes {target_file} which downloads and runs external code -- supply chain attack pattern (Shai-Hulud/worm).",
+                                evidence={
+                                    "package_json": f.path,
+                                    "hook": hook,
+                                    "command": cmd,
+                                    "target_file": other.path,
+                                    "downloads_code": downloads_code,
+                                },
+                                tags=["supply_chain", "preinstall", "dropper", "worm"],
+                            ))
+                        break
+        return obs
 
     def _aggregate_verdict(
         self,

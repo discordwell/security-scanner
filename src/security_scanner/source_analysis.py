@@ -340,7 +340,7 @@ POPULAR_PACKAGES = {
     ],
 }
 
-_POSTINSTALL_EXEC_RE = re.compile(r'(node|python|python3|bash|sh|curl|wget|powershell)\b')
+_POSTINSTALL_EXEC_RE = re.compile(r'(node|python|python3|bash|sh|curl|wget|powershell|bun|npx)\b')
 
 
 def _is_typosquat(name: str, ecosystem: str) -> str | None:
