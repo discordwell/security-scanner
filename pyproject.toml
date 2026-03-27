@@ -28,6 +28,9 @@ tools = [
 analysis = [
   "angr>=9.2.0",
 ]
+llm = [
+  "anthropic>=0.40.0,<1.0.0",
+]
 postgres = [
   "asyncpg>=0.30.0,<1.0.0",
 ]

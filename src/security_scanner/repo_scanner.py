@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from .config import Settings, get_settings
+from .llm_analysis import LLMAnalysisPhase, select_targets
 from .models import (
     FileClassification,
     Observation,
@@ -15,6 +16,7 @@ from .models import (
     VerdictRecord,
     VerdictState,
 )
+from .reference_graph import build_reference_graph, graph_to_observations
 from .service import AnalysisService
 from .source_analysis import analyze_source
 
@@ -193,7 +195,16 @@ class RepoScanner:
                     f.observations.append(obs_item)
                     break
 
-        # Aggregate verdict
+        # Phase 2: Cross-file reference graph
+        graph = build_reference_graph(files, repo_path)
+        graph_obs = graph_to_observations(graph)
+        all_observations.extend(graph_obs)
+
+        # Phase 3: LLM analysis (optional)
+        llm_result = await self._run_llm_analysis(files, graph, repo_path)
+        all_observations.extend(llm_result.observations)
+
+        # Phase 4: Aggregate verdict
         aggregate, risk_summary = self._aggregate_verdict(all_observations, binary_verdicts)
 
         # Top findings sorted by severity
@@ -202,6 +213,9 @@ class RepoScanner:
             all_observations,
             key=lambda o: severity_order.get(o.severity.value, 5),
         )[:20]
+
+        # LLM targets for interactive mode
+        llm_targets = select_targets(files, graph, max_targets=self.settings.llm_max_files_per_scan)
 
         report = RepoReport(
             repo_path=str(repo_path),
@@ -219,6 +233,26 @@ class RepoScanner:
                 "high_findings": sum(1 for o in all_observations if o.severity.value in ("high", "critical")),
                 "medium_findings": sum(1 for o in all_observations if o.severity.value == "medium"),
             },
+            cross_file_leads=[
+                {"data_file": l.data_file, "exec_file": l.exec_file,
+                 "connection": l.connection, "severity": l.severity.value,
+                 "explanation": l.explanation}
+                for l in graph.leads
+            ],
+            llm_analysis_targets=[
+                {"path": t.path, "prompt_type": t.prompt_type,
+                 "priority": t.priority, "context": t.context}
+                for t in llm_targets
+            ],
+            llm_findings=llm_result.observations,
+            llm_statistics={
+                "files_analyzed": llm_result.files_analyzed,
+                "files_skipped": llm_result.files_skipped,
+                "total_input_tokens": llm_result.total_input_tokens,
+                "total_output_tokens": llm_result.total_output_tokens,
+                "adapter_available": llm_result.adapter_available,
+                "targets_selected": llm_result.targets_selected,
+            },
         )
 
         logger.info(
@@ -226,6 +260,29 @@ class RepoScanner:
             len(classified), aggregate.value, len(all_observations),
         )
         return report
+
+    async def _run_llm_analysis(self, files, graph, repo_path):
+        from .llm_analysis import LLMAnalysisPhase, LLMAnalysisResult
+        if not self.settings.llm_enabled:
+            return LLMAnalysisResult(adapter_available=False)
+        try:
+            from .adapters.anthropic_llm import AnthropicLLMAdapter, HAS_ANTHROPIC
+            if not HAS_ANTHROPIC:
+                logger.info("LLM analysis skipped: anthropic SDK not installed")
+                return LLMAnalysisResult(adapter_available=False)
+            api_key = self.settings.llm_api_key or None
+            adapter = AnthropicLLMAdapter(
+                api_key=api_key,
+                model=self.settings.llm_model,
+                max_tokens=self.settings.llm_max_tokens_per_file,
+                timeout=self.settings.llm_timeout,
+            )
+        except (ImportError, Exception) as exc:
+            logger.info("LLM analysis skipped: %s", exc)
+            return LLMAnalysisResult(adapter_available=False)
+
+        phase = LLMAnalysisPhase(settings=self.settings, adapter=adapter)
+        return await phase.analyze(files, graph, repo_path)
 
     def _correlate_preinstall_hooks(
         self, files: list[RepoFileRecord], repo_path: Path,

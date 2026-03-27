@@ -44,13 +44,23 @@ def cmd_migrate(args):
 
 
 def cmd_analyze(args):
+    from .config import get_settings
     from .logging_config import setup_logging
     from .repo_scanner import RepoScanner
     from .service import AnalysisService
 
     async def run():
         setup_logging()
-        scanner = RepoScanner(analysis_service=AnalysisService())
+        settings = get_settings()
+        if args.no_llm:
+            settings.llm_enabled = False
+        elif args.llm:
+            settings.llm_enabled = True
+        if args.llm_model:
+            settings.llm_model = args.llm_model
+        if args.llm_budget:
+            settings.llm_budget_tokens = args.llm_budget
+        scanner = RepoScanner(analysis_service=AnalysisService(), settings=settings)
         repo_path = Path(args.path).resolve()
         if not repo_path.is_dir():
             print(f"Error: {repo_path} is not a directory", file=sys.stderr)
@@ -111,6 +121,10 @@ def main():
     analyze.add_argument("path", help="Path to the repository directory")
     analyze.add_argument("--output", "-o", help="Output JSON report to file")
     analyze.add_argument("--format", choices=["json", "summary"], default="summary", help="Output format")
+    analyze.add_argument("--llm", action="store_true", default=None, help="Enable LLM deep analysis")
+    analyze.add_argument("--no-llm", action="store_true", help="Disable LLM analysis")
+    analyze.add_argument("--llm-model", default=None, help="LLM model (default: claude-sonnet-4-20250514)")
+    analyze.add_argument("--llm-budget", type=int, default=None, help="LLM token budget")
 
     args = parser.parse_args()
     if args.command == "serve":

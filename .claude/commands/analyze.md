@@ -1,95 +1,84 @@
 # Security Analysis: Deep Dive
 
-Perform a comprehensive security analysis of a repository or directory, combining automated scanning with AI-powered code review.
+Perform a comprehensive security analysis combining automated scanning with AI-powered code review.
 
 ## Arguments
 $ARGUMENTS - Path to the repository or directory to analyze
 
-## Workflow
+## Phase 1: Automated Scan
 
-### Phase 1: Automated Scan
-
-Run the scanner's automated heuristics against the target:
+Run the scanner (LLM analysis disabled -- YOU are the LLM layer):
 
 ```bash
-uv run python -m security_scanner analyze $ARGUMENTS --output /tmp/scanner-report.json --format json
+uv run python -m security_scanner analyze $ARGUMENTS --no-llm --output /tmp/scanner-report.json --format json
 ```
 
-Also produce a human-readable summary:
+Also get a quick summary:
 ```bash
-uv run python -m security_scanner analyze $ARGUMENTS --format summary
+uv run python -m security_scanner analyze $ARGUMENTS --no-llm --format summary
 ```
 
-Read `/tmp/scanner-report.json` and note:
-- The aggregate verdict (CLEAN/SUSPICIOUS/MALICIOUS)
-- Total file count and breakdown by classification
-- All HIGH and CRITICAL severity findings
-- All MEDIUM findings grouped by category
+Read `/tmp/scanner-report.json`. Note:
+- `aggregate_verdict` (CLEAN/SUSPICIOUS/MALICIOUS)
+- `statistics` (file counts, finding counts)
+- `top_findings` (highest severity observations)
+- `cross_file_leads` (data→exec flows detected between files)
+- `llm_analysis_targets` (prioritized list of files needing deep analysis)
 
-### Phase 2: AI Triage
+## Phase 2: AI Triage
 
-Based on the automated report, identify the files that need manual review. Prioritize:
+Read `llm_analysis_targets` from the report. Each entry has:
+- `path`: File to analyze
+- `prompt_type`: Analysis approach ("suspicious_source", "cross_file", "entry_point", "build_file")
+- `priority`: Numeric score (100=cross-file lead, 90=entry point with HIGH, etc.)
+- `context`: Why this was selected + regex findings
 
-1. Files with HIGH/CRITICAL observations
-2. Binary files with MALICIOUS/SUSPICIOUS verdicts
-3. Files with multiple MEDIUM observations
-4. Dependency manifests (package.json, requirements.txt, setup.py, go.mod)
-5. Entry points (main.py, index.js, setup.py, __init__.py)
-6. Any file with obfuscation indicators
+Also read `cross_file_leads` -- these are data→exec flow patterns where encoded data in one file is reachable from exec-capable code in another.
 
-### Phase 3: Deep Dive (Sub-Agents)
+If both are empty and verdict is CLEAN, skip to Phase 5.
 
-For each suspicious file identified in Phase 2, spawn an Explore sub-agent to analyze it. Give each agent a focused task:
+## Phase 3: Deep Dive (Sub-Agents)
 
-**For obfuscated code:**
-- Read the file
-- Attempt to decode any base64/hex/packed content
-- Trace what the decoded payload does
-- Identify C2 servers, exfiltration targets, persistence mechanisms
+For the top targets (up to 5), spawn sub-agents in parallel based on `prompt_type`:
 
-**For suspicious binaries (after extraction):**
-- Check strings output for wallet addresses, URLs, credential paths
-- Map the attack chain: dropper -> payload -> exfiltration
+**For "suspicious_source":**
+Read the file. The scanner found [context.findings]. Determine what this code actually DOES when executed. Decode any encoded/encrypted content. Is there a legitimate reason for the flagged patterns? Look for indirect function calls (getattr, globals()['exec']), string-constructed function names, split variables that reassemble to dangerous operations. Report: what the code does, whether it's malicious, IOCs.
 
-**For dependency manifests:**
-- Check every dependency name against known legitimate packages
-- Flag any with post-install hooks
-- Look for version pinning to known-vulnerable versions
+**For "cross_file":**
+Read both files named in context.lead. Trace the data flow: does encoded data from the data_file get decoded and executed by the exec_file? Is this a split payload attack or a legitimate pattern (config loading, template rendering, test data)?
 
-**For entry points and scripts:**
-- Trace the execution flow from entry point
-- Identify what gets executed, downloaded, or exfiltrated
-- Look for anti-analysis checks (debugger detection, VM detection, sleep timers)
+**For "entry_point":**
+This is setup.py/package.json/etc. What happens when a user runs pip install/npm install? Does it execute code during installation? Does it download anything? Does it reference any files the scanner flagged?
 
-Run up to 3 sub-agents in parallel for efficiency.
+**For "build_file":**
+Does this Dockerfile/CI config download and execute external scripts? Does it access secrets unexpectedly? Are there curl|bash patterns?
 
-### Phase 4: Kill Chain Reconstruction
+## Phase 4: Kill Chain Reconstruction
 
-If the verdict is SUSPICIOUS or MALICIOUS, reconstruct the attack chain:
+If findings suggest SUSPICIOUS or MALICIOUS, reconstruct:
 
-1. **Initial Access**: How does the malware get executed? (game launcher, npm install hook, Python import)
-2. **Execution**: What runs first? What gets unpacked/decoded?
-3. **Collection**: What data does it target? (browser cookies, crypto wallets, SSH keys, tokens)
-4. **Exfiltration**: Where does stolen data go? (C2 server, Telegram bot, Discord webhook)
-5. **Persistence**: Does it install anything permanent? (registry keys, cron jobs, startup items)
+1. **Initial Access**: How does the malware execute? (pip install hook, npm preinstall, import)
+2. **Execution**: What runs first? What gets decoded/decrypted?
+3. **Collection**: What data is targeted? (browser cookies, crypto wallets, SSH keys, tokens)
+4. **Exfiltration**: Where does stolen data go? (C2 server, Telegram, Discord webhook, blockchain)
+5. **Persistence**: Anything permanent? (registry, cron, startup items, ~/init.json)
 
-### Phase 5: Final Report
+## Phase 5: Final Report
 
-Produce a structured assessment:
+**Verdict**: CLEAN / SUSPICIOUS / MALICIOUS (confidence: LOW/MEDIUM/HIGH)
 
-**Verdict**: CLEAN / SUSPICIOUS / MALICIOUS (with confidence: LOW/MEDIUM/HIGH)
-
-**Executive Summary**: 2-3 sentences describing what this repo is and what it does.
+**Executive Summary**: 2-3 sentences.
 
 **Risk Assessment**:
-- What the automated scanner found (counts by severity)
-- What the AI deep dive revealed
-- Key IOCs (IPs, domains, wallet addresses, file hashes)
+- Automated scanner findings (counts by severity)
+- AI deep dive findings
+- Cross-file leads detected
+- Key IOCs (IPs, domains, wallet addresses, hashes)
 
-**Evidence Table**: For each finding:
+**Evidence Table**:
 | File | Line | Severity | Finding | Explanation |
 |------|------|----------|---------|-------------|
 
-**Kill Chain** (if malicious): Step-by-step attack flow with file references.
+**Kill Chain** (if malicious): Step-by-step attack flow.
 
-**Recommendations**: Specific actions (block hash, report to platform, notify affected users, etc.)
+**Recommendations**: Block hash, report to platform, notify users, etc.

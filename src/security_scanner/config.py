@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     repo_max_file_size: int = 10 * 1024 * 1024
     repo_skip_dirs: list[str] = [".git", ".svn", ".hg", "node_modules", "__pycache__", ".venv", "venv", ".tox", "dist", "build"]
 
+    # LLM analysis (optional, requires anthropic SDK + API key)
+    llm_enabled: bool = True
+    llm_api_key: str = ""
+    llm_model: str = "claude-sonnet-4-20250514"
+    llm_max_files_per_scan: int = 10
+    llm_max_tokens_per_file: int = 4096
+    llm_budget_tokens: int = 100_000
+    llm_timeout: int = 120
+
     # Auth & security
     require_auth: bool = False
     global_rate_limit: int = 120
