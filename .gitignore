@@ -8,3 +8,4 @@ data/artifacts/
 .coverage
 *.db
 .env
+eval/results.json
