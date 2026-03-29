@@ -692,12 +692,38 @@ def detect_indirect_exec(content: str, path: str) -> list[Observation]:
 def analyze_source(content: str, path: str, classification: FileClassification) -> list[Observation]:
     """Run all applicable detectors on a source/config/script file."""
     observations: list[Observation] = []
-    observations.extend(detect_obfuscation(content, path))
-    observations.extend(detect_suspicious_imports(content, path))
-    observations.extend(detect_embedded_payloads(content, path))
-    observations.extend(detect_secrets(content, path))
-    observations.extend(detect_behavioral_patterns(content, path))
-    observations.extend(detect_indirect_exec(content, path))
+
+    # AST constant resolution for Python files: resolve obfuscated strings
+    # so downstream regex detectors work on actual values
+    analysis_content = content
+    if path.lower().endswith(".py"):
+        try:
+            from .ast_resolver import resolve_constants
+            resolved = resolve_constants(content)
+            if resolved.values:
+                # Append resolved strings as synthetic assignments so regex finds them
+                resolved_lines = "\n".join(
+                    f'__resolved_{i} = "{v}"' for i, v in enumerate(resolved.values)
+                )
+                analysis_content = content + "\n# [AST-RESOLVED]\n" + resolved_lines
+                if resolved.original_had_obfuscation:
+                    observations.append(Observation(
+                        source="ast-resolver",
+                        category="ast:resolved_obfuscation",
+                        severity=ObservationSeverity.MEDIUM,
+                        message=f"AST resolution recovered {len(resolved.values)} obfuscated strings in {path}: {', '.join(v[:30] for v in resolved.values[:5])}",
+                        evidence={"path": path, "resolved": resolved.values[:10]},
+                        tags=["ast", "deobfuscation"],
+                    ))
+        except Exception:
+            pass  # AST resolution is best-effort
+
+    observations.extend(detect_obfuscation(analysis_content, path))
+    observations.extend(detect_suspicious_imports(analysis_content, path))
+    observations.extend(detect_embedded_payloads(analysis_content, path))
+    observations.extend(detect_secrets(analysis_content, path))
+    observations.extend(detect_behavioral_patterns(analysis_content, path))
+    observations.extend(detect_indirect_exec(analysis_content, path))
     if classification == FileClassification.CONFIG:
         observations.extend(detect_dependency_risks(content, path))
 
