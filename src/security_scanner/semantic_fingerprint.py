@@ -127,6 +127,9 @@ class _FingerprintVisitor(ast.NodeVisitor):
             # Network calls
             if any(n in func_name for n in ("urlopen", "request", "fetch", "connect", "getaddrinfo")):
                 self.fp.makes_network_calls = True
+            # Home directory access via expanduser/Path.home
+            if any(n in func_name for n in ("expanduser", "Path.home")):
+                self.fp.reads_home_dir = True
             # atexit.register
             if "atexit.register" in func_name or func_name == "register":
                 self.fp.registers_atexit = True

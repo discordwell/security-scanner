@@ -192,6 +192,81 @@ def build_reference_graph(
                     explanation=f"Exec-capable {exec_path} references encoded data in {data_path}.",
                 ))
 
+    # Pass 4: Detect cross-file BEHAVIORAL flows (credential_io → network)
+    # This catches capability separation attacks where credential reading
+    # and data exfiltration are split into different files.
+    credential_io_files: set[str] = set()
+    network_files: set[str] = set()
+    for f in files:
+        fp = f.metadata.get("fingerprint", {})
+        caps = set(fp.get("capabilities", []))
+        # File reads from home directory or accesses credentials
+        if ("accesses_home" in caps or "file_io" in caps) and caps & {"accesses_home", "file_io"}:
+            if "imports_network" not in caps and "network_calls" not in caps:
+                # File does I/O but NOT network -- potential credential reader
+                credential_io_files.add(f.path)
+        # File makes network calls but doesn't read home dir files
+        if ("imports_network" in caps or "network_calls" in caps):
+            if "accesses_home" not in caps and "file_io" not in caps:
+                # File does network but NOT local I/O -- potential data sender
+                network_files.add(f.path)
+
+    # Find behavioral flow leads: credential_io file connected to network file
+    if credential_io_files and network_files:
+        for io_path in credential_io_files:
+            reachable = _reachable_from(io_path, reverse_adj, max_depth=2)
+            for net_path in network_files:
+                if net_path in reachable:
+                    existing_pairs = {(l.data_file, l.exec_file) for l in graph.leads}
+                    if (io_path, net_path) not in existing_pairs:
+                        graph.leads.append(CrossFileLead(
+                            data_file=io_path,
+                            exec_file=net_path,
+                            connection=f"behavioral-flow (depth {reachable[net_path]})",
+                            data_indicators=["credential_io"],
+                            exec_indicators=["network_send"],
+                            severity=ObservationSeverity.MEDIUM,
+                            explanation=f"Credential reader {io_path} is connected to network sender {net_path} -- potential capability separation attack.",
+                        ))
+
+        # Reverse direction too
+        for net_path in network_files:
+            reachable = _reachable_from(net_path, forward_adj, max_depth=2)
+            for io_path in credential_io_files:
+                if io_path in reachable:
+                    existing_pairs = {(l.data_file, l.exec_file) for l in graph.leads}
+                    if (io_path, net_path) not in existing_pairs:
+                        graph.leads.append(CrossFileLead(
+                            data_file=io_path,
+                            exec_file=net_path,
+                            connection=f"behavioral-flow-reverse (depth {reachable[io_path]})",
+                            data_indicators=["credential_io"],
+                            exec_indicators=["network_send"],
+                            severity=ObservationSeverity.MEDIUM,
+                            explanation=f"Network sender {net_path} imports credential reader {io_path} -- potential capability separation attack.",
+                        ))
+
+    # Also check for shared importers (siblings): if __init__.py imports both
+    # a credential reader and a network sender, that's a capability separation attack
+    if credential_io_files and network_files:
+        for io_path in credential_io_files:
+            io_importers = set(reverse_adj.get(io_path, set()))
+            for net_path in network_files:
+                net_importers = set(reverse_adj.get(net_path, set()))
+                common = io_importers & net_importers
+                if common:
+                    existing_pairs = {(l.data_file, l.exec_file) for l in graph.leads}
+                    if (io_path, net_path) not in existing_pairs:
+                        graph.leads.append(CrossFileLead(
+                            data_file=io_path,
+                            exec_file=net_path,
+                            connection=f"shared-importer ({', '.join(sorted(common)[:3])})",
+                            data_indicators=["credential_io"],
+                            exec_indicators=["network_send"],
+                            severity=ObservationSeverity.MEDIUM,
+                            explanation=f"Credential reader {io_path} and network sender {net_path} are imported by the same module ({', '.join(sorted(common)[:3])}) -- potential capability separation.",
+                        ))
+
     # Safety net: high lead count suggests a security/crypto library, not split payloads.
     # Real attacks have 1-5 focused leads, not 20+.
     if len(graph.leads) > 20:
@@ -271,6 +346,22 @@ def _resolve_path(
             candidate = module_path + suffix
             if candidate in known_paths:
                 return candidate
+
+    # Python relative import: .foo or ..foo → sibling module
+    if target.startswith(".") and "/" not in target:
+        # Count leading dots for relative level
+        dots = len(target) - len(target.lstrip("."))
+        module_name = target.lstrip(".")
+        if module_name:
+            # Go up 'dots-1' levels from source directory, then resolve module
+            base = Path(source_dir)
+            for _ in range(dots - 1):
+                base = base.parent
+            module_path = str(base / module_name)
+            for suffix in (".py", "/__init__.py"):
+                candidate = module_path + suffix
+                if candidate in known_paths:
+                    return candidate
 
     # Relative path: ./foo or ../foo
     if target.startswith("."):
