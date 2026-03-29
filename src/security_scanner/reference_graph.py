@@ -44,10 +44,16 @@ DATA_CATEGORIES = {
     "payload:encoded", "payload:shellcode", "payload:data_uri",
     "obfuscation:invisible_unicode",
 }
+# Strong data indicators: a single one of these is enough to classify as DATA_CAPABLE
+STRONG_DATA_CATEGORIES = {"payload:shellcode", "obfuscation:invisible_unicode", "payload:encoded"}
+
 EXEC_CATEGORIES = {
     "obfuscation:eval_exec", "obfuscation:import_exec_chain",
     "obfuscation:dynamic_import", "obfuscation:marshal",
-    "import:suspicious", "obfuscation:nested_decode",
+    "obfuscation:nested_decode",
+    # Note: "import:suspicious" intentionally excluded -- merely importing
+    # socket/subprocess doesn't make a file exec-capable. Real split-payload
+    # attacks always have actual eval/exec/compile in the loader.
 }
 
 
@@ -119,7 +125,10 @@ def build_reference_graph(
     exec_files: set[str] = set()
     for f in files:
         cats = {o.category for o in f.observations}
-        if cats & DATA_CATEGORIES:
+        data_hits = cats & DATA_CATEGORIES
+        # Require 2+ data indicators OR a single strong one (shellcode, invisible unicode)
+        # This prevents crypto constants (single hex_escape) from flooding the graph
+        if len(data_hits) >= 2 or (data_hits & STRONG_DATA_CATEGORIES):
             data_files.add(f.path)
         if cats & EXEC_CATEGORIES:
             exec_files.add(f.path)
@@ -181,6 +190,14 @@ def build_reference_graph(
                     severity=ObservationSeverity.HIGH if depth == 1 else ObservationSeverity.MEDIUM,
                     explanation=f"Exec-capable {exec_path} references encoded data in {data_path}.",
                 ))
+
+    # Safety net: high lead count suggests a security/crypto library, not split payloads.
+    # Real attacks have 1-5 focused leads, not 20+.
+    if len(graph.leads) > 20:
+        logger.info("High lead count (%d) suggests security library; downgrading to MEDIUM", len(graph.leads))
+        for lead in graph.leads:
+            if lead.severity == ObservationSeverity.HIGH:
+                lead.severity = ObservationSeverity.MEDIUM
 
     logger.info(
         "Reference graph: %d refs, %d leads, %d entry points, %d manifests, %d build files",

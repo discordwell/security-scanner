@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     llm_max_tokens_per_file: int = 4096
     llm_budget_tokens: int = 100_000
     llm_timeout: int = 120
+    llm_triage_threshold: int = 20
+    llm_triage_max_deep_dive: int = 5
+    llm_triage_budget_tokens: int = 15_000
 
     # Auth & security
     require_auth: bool = False

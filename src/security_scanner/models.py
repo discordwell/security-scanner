@@ -227,6 +227,7 @@ class RepoReport(BaseModel):
     llm_analysis_targets: list[dict[str, Any]] = Field(default_factory=list)
     llm_findings: list[Observation] = Field(default_factory=list)
     llm_statistics: dict[str, Any] = Field(default_factory=dict)
+    llm_triage_result: dict[str, Any] = Field(default_factory=dict)
 
 
 class StateSnapshot(BaseModel):

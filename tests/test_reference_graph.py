@@ -125,7 +125,7 @@ def test_cross_file_lead_data_to_exec(tmp_path):
     (tmp_path / "data.py").write_text("PAYLOAD = 'aGVsbG8='\n")
     (tmp_path / "loader.py").write_text("from data import PAYLOAD\nimport base64\nexec(base64.b64decode(PAYLOAD))\n")
     files = [
-        _file("data.py", observations=[_obs("obfuscation:base64")]),
+        _file("data.py", observations=[_obs("obfuscation:base64"), _obs("payload:long_string")]),
         _file("loader.py", observations=[_obs("obfuscation:eval_exec")]),
     ]
     graph = build_reference_graph(files, tmp_path)
@@ -148,7 +148,7 @@ def test_no_self_leads(tmp_path):
     """A file with both data AND exec shouldn't lead to itself."""
     (tmp_path / "evil.py").write_text("exec(base64.b64decode('aGVsbG8='))\n")
     files = [
-        _file("evil.py", observations=[_obs("obfuscation:base64"), _obs("obfuscation:eval_exec")]),
+        _file("evil.py", observations=[_obs("obfuscation:base64"), _obs("payload:long_string"), _obs("obfuscation:eval_exec")]),
     ]
     graph = build_reference_graph(files, tmp_path)
     assert graph.leads == []
@@ -160,7 +160,7 @@ def test_transitive_lead(tmp_path):
     (tmp_path / "middle.py").write_text("from data import BLOB\ndef get(): return BLOB\n")
     (tmp_path / "runner.py").write_text("from middle import get\nexec(get())\n")
     files = [
-        _file("data.py", observations=[_obs("obfuscation:base64")]),
+        _file("data.py", observations=[_obs("obfuscation:base64"), _obs("payload:long_string")]),
         _file("middle.py"),
         _file("runner.py", observations=[_obs("obfuscation:eval_exec")]),
     ]
@@ -175,7 +175,7 @@ def test_reverse_reference_lead(tmp_path):
     (tmp_path / "config.json").write_text('{"code": "aGVsbG8="}')
     (tmp_path / "loader.py").write_text("import json\ndata = json.load(open('config.json'))\nexec(data['code'])\n")
     files = [
-        _file("config.json", FileClassification.CONFIG, observations=[_obs("payload:long_string")]),
+        _file("config.json", FileClassification.CONFIG, observations=[_obs("payload:long_string"), _obs("obfuscation:base64")]),
         _file("loader.py", observations=[_obs("obfuscation:eval_exec")]),
     ]
     graph = build_reference_graph(files, tmp_path)
@@ -188,7 +188,7 @@ def test_graph_to_observations(tmp_path):
     (tmp_path / "a.py").write_text("X = 'blob'\n")
     (tmp_path / "b.py").write_text("from a import X\nexec(X)\n")
     files = [
-        _file("a.py", observations=[_obs("obfuscation:base64")]),
+        _file("a.py", observations=[_obs("obfuscation:base64"), _obs("payload:long_string")]),
         _file("b.py", observations=[_obs("obfuscation:eval_exec")]),
     ]
     graph = build_reference_graph(files, tmp_path)
@@ -213,3 +213,68 @@ def test_missing_file_handled(tmp_path):
     files = [_file("ghost.py")]
     graph = build_reference_graph(files, tmp_path)
     assert graph.references == []
+
+
+# -- Sensitivity tuning tests --
+
+def test_import_suspicious_alone_not_exec_capable(tmp_path):
+    """File with only import:suspicious (e.g. socket) should NOT create cross-file leads."""
+    (tmp_path / "data.py").write_text("BLOB = 'encoded'\n")
+    (tmp_path / "transport.py").write_text("import socket\nfrom data import BLOB\n")
+    files = [
+        _file("data.py", observations=[_obs("obfuscation:base64"), _obs("payload:long_string")]),
+        _file("transport.py", observations=[_obs("import:suspicious")]),
+    ]
+    graph = build_reference_graph(files, tmp_path)
+    assert graph.leads == []
+
+
+def test_single_hex_escape_not_data_capable(tmp_path):
+    """File with only hex_escape (crypto constants) should NOT be DATA_CAPABLE."""
+    (tmp_path / "common.py").write_text("CONST = b'\\x00\\x01\\x02'\n")
+    (tmp_path / "runner.py").write_text("from common import CONST\nexec(code)\n")
+    files = [
+        _file("common.py", observations=[_obs("obfuscation:hex_escape")]),
+        _file("runner.py", observations=[_obs("obfuscation:eval_exec")]),
+    ]
+    graph = build_reference_graph(files, tmp_path)
+    assert graph.leads == []
+
+
+def test_strong_single_indicator_still_data_capable(tmp_path):
+    """shellcode or invisible_unicode alone IS enough (these are always suspicious)."""
+    (tmp_path / "payload.py").write_text("SC = b'\\x90\\x90'\n")
+    (tmp_path / "loader.py").write_text("from payload import SC\nexec(SC)\n")
+    files = [
+        _file("payload.py", observations=[_obs("payload:shellcode")]),
+        _file("loader.py", observations=[_obs("obfuscation:eval_exec")]),
+    ]
+    graph = build_reference_graph(files, tmp_path)
+    assert len(graph.leads) >= 1
+
+
+def test_high_lead_count_downgrades_severity(tmp_path):
+    """When >20 leads generated, all should be downgraded to MEDIUM."""
+    # Create 25 data+exec file pairs to trigger the downgrade
+    files = []
+    for i in range(25):
+        (tmp_path / f"data_{i}.py").write_text(f"D{i} = 'blob'\n")
+        (tmp_path / f"exec_{i}.py").write_text(f"from data_{i} import D{i}\nexec(D{i})\n")
+        files.append(_file(f"data_{i}.py", observations=[_obs("obfuscation:base64"), _obs("payload:long_string")]))
+        files.append(_file(f"exec_{i}.py", observations=[_obs("obfuscation:eval_exec")]))
+    graph = build_reference_graph(files, tmp_path)
+    assert len(graph.leads) > 20
+    assert all(lead.severity == ObservationSeverity.MEDIUM for lead in graph.leads)
+
+
+def test_low_lead_count_preserves_high(tmp_path):
+    """When <=20 leads, HIGH severity is preserved."""
+    (tmp_path / "data.py").write_text("X = 'blob'\n")
+    (tmp_path / "exec.py").write_text("from data import X\nexec(X)\n")
+    files = [
+        _file("data.py", observations=[_obs("obfuscation:base64"), _obs("payload:long_string")]),
+        _file("exec.py", observations=[_obs("obfuscation:eval_exec")]),
+    ]
+    graph = build_reference_graph(files, tmp_path)
+    assert len(graph.leads) <= 20
+    assert any(lead.severity == ObservationSeverity.HIGH for lead in graph.leads)

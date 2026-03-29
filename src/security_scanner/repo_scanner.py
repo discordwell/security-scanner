@@ -214,8 +214,13 @@ class RepoScanner:
             key=lambda o: severity_order.get(o.severity.value, 5),
         )[:20]
 
-        # LLM targets for interactive mode
-        llm_targets = select_targets(files, graph, max_targets=self.settings.llm_max_files_per_scan)
+        # LLM targets for interactive mode (include triage results if available)
+        triage_suspicious = llm_result.triage_suspicious_files if llm_result.triage_mode else None
+        llm_targets = select_targets(
+            files, graph,
+            max_targets=self.settings.llm_max_files_per_scan,
+            triage_suspicious=triage_suspicious,
+        )
 
         report = RepoReport(
             repo_path=str(repo_path),
@@ -252,6 +257,11 @@ class RepoScanner:
                 "total_output_tokens": llm_result.total_output_tokens,
                 "adapter_available": llm_result.adapter_available,
                 "targets_selected": llm_result.targets_selected,
+                "triage_mode": llm_result.triage_mode,
+            },
+            llm_triage_result={
+                "mode": "triage" if llm_result.triage_mode else "direct",
+                "suspicious_files": llm_result.triage_suspicious_files,
             },
         )
 
