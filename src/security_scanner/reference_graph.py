@@ -27,6 +27,7 @@ _JS_READFILE_RE = re.compile(r'''(?:readFileSync|readFile)\s*\(\s*['"]([\w./\\-]
 ENTRY_POINT_NAMES = {
     "setup.py", "main.py", "app.py", "server.py", "index.js", "index.ts",
     "main.go", "main.rs", "Program.cs", "__main__.py",
+    "conftest.py", "manage.py",
 }
 MANIFEST_NAMES = {
     "package.json", "requirements.txt", "pyproject.toml", "Pipfile",

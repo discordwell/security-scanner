@@ -538,17 +538,21 @@ def detect_secrets(content: str, path: str) -> list[Observation]:
 
 # Sensitive file paths that credential stealers target
 _SENSITIVE_PATH_RE = re.compile(
-    r'(?:expanduser|homedir|HOME|USERPROFILE|home_?dir)'
+    r'(?:expanduser|homedir|HOME|USERPROFILE|home_?dir|Path\.home|Path\(\s*["\']~["\'])'
     r'.*?'
     r'(?:\.ssh|\.aws|\.npmrc|\.gitconfig|\.gnupg|\.env\b|\.docker|\.kube|'
     r'credentials|id_rsa|id_ed25519|\.yarnrc|\.pypirc|\.netrc|'
     r'Local\s*Storage|cookies\.sqlite|Login\s*Data|\.config/gh)',
     re.IGNORECASE | re.DOTALL,
 )
-# Direct path string references
+# Direct path string references (with home prefix)
 _SENSITIVE_LITERAL_RE = re.compile(
     r'''['"]((?:~/|/home/|%USERPROFILE%)[^'"]*?(?:\.ssh|\.aws|\.npmrc|\.gitconfig|\.env|\.docker|\.kube|credentials|id_rsa|\.yarnrc|\.pypirc))['"]''',
     re.IGNORECASE,
+)
+# Bare sensitive path strings (without home prefix -- catches loop patterns)
+_BARE_SENSITIVE_RE = re.compile(
+    r'''['"]\.(?:ssh/(?:id_rsa|id_ed25519|config|known_hosts)|aws/credentials|gitconfig|npmrc|docker/config\.json|kube/config|gnupg|pypirc|netrc|yarnrc)['"]''',
 )
 
 # Network exfiltration methods
@@ -570,7 +574,8 @@ def detect_behavioral_patterns(content: str, path: str) -> list[Observation]:
     # Find sensitive file access
     sensitive_hits = _SENSITIVE_PATH_RE.findall(content)
     literal_hits = _SENSITIVE_LITERAL_RE.findall(content)
-    all_sensitive = sensitive_hits + literal_hits
+    bare_hits = _BARE_SENSITIVE_RE.findall(content)
+    all_sensitive = sensitive_hits + literal_hits + bare_hits
 
     # Find network exfiltration
     exfil_hits = _EXFIL_PYTHON_RE.findall(content) + _EXFIL_JS_RE.findall(content)

@@ -364,6 +364,9 @@ def select_targets(
         # Priority 60: Build/CI files with findings
         elif f.path in build_set:
             _add(f.path, "build_file", 60, {"findings": findings_summary})
+        # Priority 65: Migration files with findings (run during manage.py migrate)
+        elif "/migrations/" in f.path and f.path.endswith(".py") and has_medium:
+            _add(f.path, "suspicious_source", 65, {"findings": findings_summary})
         # Priority 55: Behavioral credential theft (single finding is enough -- this is high signal)
         elif any(o.category.startswith("behavioral:credential_access") for o in f.observations):
             _add(f.path, "suspicious_source", 55, {"findings": findings_summary})
