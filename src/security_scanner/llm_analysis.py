@@ -364,9 +364,18 @@ def select_targets(
         # Priority 60: Build/CI files with findings
         elif f.path in build_set:
             _add(f.path, "build_file", 60, {"findings": findings_summary})
-        # Priority 85: Unresolved uncertainty signals (static analysis can't determine intent)
-        elif any(o.category.startswith("unresolved:") for o in f.observations):
-            unresolved = [o.category for o in f.observations if o.category.startswith("unresolved:")]
+        # Priority 105: 3+ uncertainty signals = auto-LLM (above cross-file leads)
+        # If static analysis is uncertain about 3+ things in one file, that's
+        # more suspicious than any cross-file graph connection.
+        unresolved = [o.category for o in f.observations if o.category.startswith("unresolved:")]
+        if len(unresolved) >= 3:
+            _add(f.path, "suspicious_source", 105, {
+                "findings": findings_summary,
+                "uncertainty_signals": unresolved,
+                "auto_llm": True,
+            })
+        # Priority 85: 1-2 uncertainty signals
+        elif unresolved:
             _add(f.path, "suspicious_source", 85, {
                 "findings": findings_summary,
                 "uncertainty_signals": unresolved,
@@ -387,9 +396,25 @@ def select_targets(
         elif has_medium and indicator_count >= 2:
             _add(f.path, "suspicious_source", 50, {"findings": findings_summary})
 
-    # Sort by priority descending, cap at max
+    # Sort by priority descending
     sorted_targets = sorted(targets.values(), key=lambda t: t.priority, reverse=True)
-    return sorted_targets[:max_targets]
+
+    # Auto-LLM targets (priority 105+) are never capped -- they must be reviewed
+    auto_llm = [t for t in sorted_targets if t.priority >= 105]
+    rest = [t for t in sorted_targets if t.priority < 105]
+
+    # Warn if too many auto-LLM targets (indicates a very suspicious repo)
+    if len(auto_llm) > 50:
+        logger.warning(
+            "WARNING: %d files have 3+ uncertainty signals -- this repo has an "
+            "unusually high number of unresolvable patterns", len(auto_llm),
+        )
+
+    # Scale max_targets by repo size for large repos
+    effective_max = max(max_targets, min(len(files) // 30, 25))
+    remaining_slots = effective_max - len(auto_llm)
+
+    return auto_llm + rest[:max(0, remaining_slots)]
 
 
 # --- Prompt construction ---
