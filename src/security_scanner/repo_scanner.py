@@ -168,11 +168,11 @@ class RepoScanner:
                     content = data.decode("utf-8", errors="replace")
                 except Exception:
                     continue
-                obs = analyze_source(content, rel_path, classification)
-                all_observations.extend(obs)
-                # Compute semantic fingerprint
+                # Compute semantic fingerprint FIRST (needed by uncertainty detector)
                 from .semantic_fingerprint import compute_fingerprint
                 fingerprint = compute_fingerprint(content, rel_path)
+                obs = analyze_source(content, rel_path, classification, fingerprint=fingerprint)
+                all_observations.extend(obs)
                 files.append(RepoFileRecord(
                     path=rel_path,
                     classification=classification,

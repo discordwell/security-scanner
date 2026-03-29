@@ -689,7 +689,115 @@ def detect_indirect_exec(content: str, path: str) -> list[Observation]:
 
 # --- Orchestrator ---
 
-def analyze_source(content: str, path: str, classification: FileClassification) -> list[Observation]:
+# --- Uncertainty signals (what static analysis can't resolve → route to LLM) ---
+
+def detect_uncertainty_signals(
+    content: str, path: str,
+    observations: list[Observation],
+    fingerprint,
+) -> list[Observation]:
+    """Detect cases where static analysis sees something but can't determine intent.
+
+    These 'unresolved:*' signals are routed to the LLM at priority 85.
+    The LLM reads the code and answers the question static analysis can't.
+    """
+    obs: list[Observation] = []
+    categories = {o.category for o in observations}
+
+    # Signal 1: exec/eval/compile with non-literal argument
+    try:
+        import ast as _ast
+        tree = _ast.parse(content)
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Call):
+                func_name = None
+                if isinstance(node.func, _ast.Name):
+                    func_name = node.func.id
+                if func_name in ("exec", "eval", "compile") and node.args:
+                    arg = node.args[0]
+                    if not isinstance(arg, _ast.Constant):
+                        # exec/eval of a variable/expression -- can't determine what runs
+                        if "obfuscation:eval_exec" not in categories:
+                            # Only signal if the basic eval_exec detector didn't already catch it
+                            # (it catches the pattern but can't resolve WHAT is exec'd)
+                            pass
+                        obs.append(Observation(
+                            source="uncertainty-detector",
+                            category="unresolved:exec_of_unknown",
+                            severity=ObservationSeverity.MEDIUM,
+                            message=f"exec/eval/compile called with non-literal argument in {path} (line {getattr(node, 'lineno', '?')}). Static analysis cannot determine what code is executed.",
+                            evidence={"path": path, "func": func_name, "line": getattr(node, "lineno", None)},
+                            tags=["unresolved", "exec"],
+                        ))
+                        break  # One per file
+    except SyntaxError:
+        pass
+
+    # Signal 2: path construction from home dir without sensitive path match
+    if fingerprint and fingerprint.reads_home_dir and fingerprint.uses_open:
+        has_behavioral = any(c.startswith("behavioral:credential_access") for c in categories)
+        if not has_behavioral:
+            obs.append(Observation(
+                source="uncertainty-detector",
+                category="unresolved:path_construction",
+                severity=ObservationSeverity.MEDIUM,
+                message=f"File {path} accesses home directory and reads files, but specific paths couldn't be determined by static analysis.",
+                evidence={"path": path, "reads_home_dir": True, "uses_open": True},
+                tags=["unresolved", "path_construction"],
+            ))
+
+    # Signal 3: network call with variable data + home dir access or encoding
+    # (network alone is too broad for database/web libraries)
+    if fingerprint and fingerprint.makes_network_calls and (fingerprint.reads_home_dir or fingerprint.accesses_env_home):
+        has_network_finding = any("network" in c or "exfil" in c or "behavioral" in c for c in categories)
+        if not has_network_finding:
+            obs.append(Observation(
+                source="uncertainty-detector",
+                category="unresolved:network_with_variable_data",
+                severity=ObservationSeverity.MEDIUM,
+                message=f"File {path} makes network calls AND accesses the home directory, but static analysis couldn't determine what data is transmitted.",
+                evidence={"path": path, "makes_network_calls": True, "reads_home_dir": True},
+                tags=["unresolved", "network"],
+            ))
+
+    # Signal 4: atexit/signal/__del__ handler with complex body
+    if fingerprint and (fingerprint.registers_atexit or fingerprint.has_del_method or fingerprint.registers_signal):
+        handler_has_io = fingerprint.uses_open or fingerprint.makes_network_calls
+        if handler_has_io:
+            obs.append(Observation(
+                source="uncertainty-detector",
+                category="unresolved:callback_with_side_effects",
+                severity=ObservationSeverity.MEDIUM,
+                message=f"File {path} registers a callback (atexit/signal/__del__) that performs file I/O or network operations. Static analysis cannot determine if the handler is cleanup or exfiltration.",
+                evidence={
+                    "path": path,
+                    "atexit": fingerprint.registers_atexit,
+                    "del": fingerprint.has_del_method,
+                    "signal": fingerprint.registers_signal,
+                    "has_io": True,
+                },
+                tags=["unresolved", "callback"],
+            ))
+
+    # Signal 5: capability cocktail without compound behavioral finding
+    if fingerprint:
+        caps = fingerprint.capability_set()
+        dangerous_caps = caps & {"imports_network", "network_calls", "file_io", "imports_encoding", "accesses_home", "atexit", "finalizer"}
+        has_compound = any(c.startswith("behavioral:credential_access") or c.startswith("compound:") for c in categories)
+        if len(dangerous_caps) >= 3 and not has_compound:
+            obs.append(Observation(
+                source="uncertainty-detector",
+                category="unresolved:capability_cocktail",
+                severity=ObservationSeverity.MEDIUM,
+                message=f"File {path} combines {len(dangerous_caps)} sensitive capabilities ({', '.join(sorted(dangerous_caps))}) but static analysis couldn't confirm they interact as a data theft pipeline.",
+                evidence={"path": path, "capabilities": sorted(dangerous_caps)},
+                tags=["unresolved", "capability_cocktail"],
+            ))
+
+    return obs
+
+
+def analyze_source(content: str, path: str, classification: FileClassification, fingerprint=None) -> list[Observation]:
     """Run all applicable detectors on a source/config/script file."""
     observations: list[Observation] = []
 
@@ -740,5 +848,9 @@ def analyze_source(content: str, path: str, classification: FileClassification) 
             evidence={"path": path, "behavioral": True, "indirect_exec": True},
             tags=["source", "compound", "credential_theft", "evasion"],
         ))
+
+    # Uncertainty signals: what static analysis detected but couldn't resolve
+    if path.lower().endswith(".py") and fingerprint is not None:
+        observations.extend(detect_uncertainty_signals(content, path, observations, fingerprint))
 
     return observations

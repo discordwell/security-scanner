@@ -364,6 +364,13 @@ def select_targets(
         # Priority 60: Build/CI files with findings
         elif f.path in build_set:
             _add(f.path, "build_file", 60, {"findings": findings_summary})
+        # Priority 85: Unresolved uncertainty signals (static analysis can't determine intent)
+        elif any(o.category.startswith("unresolved:") for o in f.observations):
+            unresolved = [o.category for o in f.observations if o.category.startswith("unresolved:")]
+            _add(f.path, "suspicious_source", 85, {
+                "findings": findings_summary,
+                "uncertainty_signals": unresolved,
+            })
         # Priority 75: Anomalous files (context mismatch with directory peers)
         elif f.metadata.get("anomaly_score", 0) >= 0.7:
             _add(f.path, "suspicious_source", 75, {
