@@ -64,6 +64,14 @@ _UNICODE_VARIATION_SELECTOR_RE = re.compile(r'[\uFE00-\uFE0F]')
 _UNICODE_PUA_SUPPLEMENT_RE = re.compile(r'[\U000E0100-\U000E01EF]')
 _CODEPOINT_DECODER_RE = re.compile(r'codePointAt\s*\(.*?0x[Ff][Ee]00')
 
+# Char-list string construction (string-split obfuscation)
+# Detects lists of single-character strings like ["s", "s", "h", "/", "i", "d", "_", "r", "s", "a"]
+# Nobody constructs strings from single-character lists in legitimate code.
+# Matches both inline join and separate list definitions.
+_CHAR_LIST_RE = re.compile(
+    r'''\[(?:\s*["'][a-zA-Z0-9_/.]["']\s*,\s*){6,}''',
+)
+
 # Dynamic import + deobfuscation + exec patterns (Python malware staple)
 _DUNDER_IMPORT_RE = re.compile(r"__import__\s*\(\s*['\"](\w+)['\"]\s*\)")
 _EXEC_COMPILE_RE = re.compile(r'exec\s*\(\s*compile\s*\(')
@@ -99,6 +107,18 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
                 break  # One per file is enough
         except Exception:
             pass
+
+    # Char-list string construction: ["s","s","h","/","i","d","_","r","s","a"]
+    char_list_matches = _CHAR_LIST_RE.findall(content)
+    if char_list_matches:
+        obs.append(Observation(
+            source="source-heuristic", category="obfuscation:char_list_join",
+            severity=ObservationSeverity.HIGH,
+            message=f"String constructed from single-character list join in {path} ({len(char_list_matches)} occurrence(s)) -- this pattern is used to evade string-based detection. No legitimate code constructs strings this way.",
+            evidence={"path": path, "count": len(char_list_matches)},
+            tags=["source", "obfuscation", "char_list_join", "string_split"],
+        ))
+        indicators += 1
 
     for pattern, name, tag in [
         (_HEX_ESCAPE_RE, "Hex-escaped byte sequence", "hex_escape"),
@@ -238,7 +258,9 @@ _HARDCODED_IP_RE = re.compile(r'''["'](https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,
 _CRYPTO_ADDR_BTC_RE = re.compile(r'\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b')
 _CRYPTO_ADDR_ETH_RE = re.compile(r'\b0x[0-9a-fA-F]{40}\b')
 
-SUSPICIOUS_PYTHON_IMPORTS = {"subprocess", "ctypes", "socket", "os.system", "os.popen", "importlib", "marshal", "compile"}
+SUSPICIOUS_PYTHON_IMPORTS = {"subprocess", "ctypes", "socket", "os.system", "os.popen", "importlib", "marshal"}
+# Note: "compile" removed -- too many false positives on "compiler", "compiled_ext", etc.
+# The compile() builtin is caught by the eval_exec detector instead.
 SUSPICIOUS_JS_IMPORTS = {"child_process", "net", "dgram"}
 SUSPICIOUS_GO_IMPORTS = {"os/exec", "net", "syscall"}
 
@@ -378,13 +400,18 @@ def detect_embedded_payloads(content: str, path: str) -> list[Observation]:
 
     long_strings = _LONG_STRING_RE.findall(content)
     if long_strings and not _is_data_file(path):
-        obs.append(Observation(
-            source="source-heuristic", category="payload:long_string",
-            severity=ObservationSeverity.MEDIUM,
-            message=f"Long encoded string ({len(long_strings[0])} chars) in {path} -- may hide a payload.",
-            evidence={"path": path, "count": len(long_strings), "max_length": max(len(s) for s in long_strings)},
-            tags=["source", "payload", "encoded"],
-        ))
+        # Filter: only flag strings that don't contain newlines (actual single-line encoded strings).
+        # The regex can match across line boundaries when a quote in a docstring matches a
+        # quote thousands of chars away in code. Real payloads are single-line encoded blobs.
+        single_line_long = [s for s in long_strings if "\n" not in s[1:-1]]
+        if single_line_long:
+            obs.append(Observation(
+                source="source-heuristic", category="payload:long_string",
+                severity=ObservationSeverity.MEDIUM,
+                message=f"Long encoded string ({len(single_line_long[0])} chars) in {path} -- may hide a payload.",
+                evidence={"path": path, "count": len(single_line_long), "max_length": max(len(s) for s in single_line_long)},
+                tags=["source", "payload", "encoded"],
+            ))
 
     if _DATA_URI_RE.search(content):
         obs.append(Observation(
