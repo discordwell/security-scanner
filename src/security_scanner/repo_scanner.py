@@ -170,12 +170,16 @@ class RepoScanner:
                     continue
                 obs = analyze_source(content, rel_path, classification)
                 all_observations.extend(obs)
+                # Compute semantic fingerprint
+                from .semantic_fingerprint import compute_fingerprint
+                fingerprint = compute_fingerprint(content, rel_path)
                 files.append(RepoFileRecord(
                     path=rel_path,
                     classification=classification,
                     size=len(data),
                     sha256=sha256,
                     observations=obs,
+                    metadata={"fingerprint": fingerprint.to_dict()},
                 ))
             else:
                 files.append(RepoFileRecord(
@@ -193,6 +197,20 @@ class RepoScanner:
             for f in files:
                 if f.path.endswith("package.json"):
                     f.observations.append(obs_item)
+                    break
+
+        # Phase 1.5b: Anomaly scoring (compare fingerprints within directories)
+        from .anomaly_scoring import compute_anomaly_scores, anomaly_to_observations
+        anomaly_results = compute_anomaly_scores(
+            files,
+            min_peers=getattr(self.settings, "anomaly_min_peers", 3),
+        )
+        for path, obs_item in anomaly_to_observations(anomaly_results):
+            all_observations.append(obs_item)
+            for f in files:
+                if f.path == path:
+                    f.observations.append(obs_item)
+                    f.metadata["anomaly_score"] = anomaly_results[path].score
                     break
 
         # Phase 2: Cross-file reference graph

@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     repo_max_file_size: int = 10 * 1024 * 1024
     repo_skip_dirs: list[str] = [".git", ".svn", ".hg", "node_modules", "__pycache__", ".venv", "venv", ".tox", "dist", "build"]
 
+    # Anomaly detection
+    anomaly_min_peers: int = 3
+    anomaly_score_threshold: float = 0.5
+
     # LLM analysis (optional, requires anthropic SDK + API key)
     llm_enabled: bool = True
     llm_api_key: str = ""
