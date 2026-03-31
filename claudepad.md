@@ -2,6 +2,33 @@
 
 ## Session Summaries
 
+### 2026-03-31T11:30:00Z
+- SSH banner exfil attack on paramiko (blackhat)
+  - Inject into pkey.py (collection) + transport.py (exfil): private key bytes → base64 → SSH version string + MSG_IGNORE post-auth
+  - Zero new scanner findings vs clean paramiko — attack is invisible to heuristics
+  - Live PoC: key material captured on VPS via banner trap and tcpdump
+  - /analyze with Claude sub-agents: **caught it** (4/4 injection points found across both files)
+- Researched real-world supply chain attacks (March 2026)
+  - **axios@1.14.1** (2026-03-31): npm credential theft → plain-crypto-js postinstall RAT dropper, self-deleting, XOR string table, C2 at sfrclak.com:8000 (dead)
+  - **SANDWORM_MODE** (2026-02-20): 19 typosquat packages including claud-code, three-channel exfil cascade (Cloudflare Workers + GitHub API + DNS/DGA), MCP server injection with prompt injection in tool descriptions, polymorphic engine stub (not operational — config only, enabled:false)
+  - **CanisterWorm/TeamPCP** (2026-03-20): blockchain C2 via ICP canisters (untakeable), self-propagating npm worm via token theft
+- Built LightGBM poisoned-PR PoC on `feature/metal-backend`
+  - New `detect_gpu.sh` helper injected into CMake `execute_process()` as plausible Metal GPU capability probing
+  - Subtree scan: 1 MEDIUM on helper script; full-repo scan: signal drowned in LightGBM noise
+  - Key lesson: PR-focused scanning should prioritize changed build/helper files over whole-repo top findings
+- Created known_threat_techniques.md (15 techniques cataloged)
+- Scanner tested against reconstructed axios malware: MALICIOUS verdict, 4 HIGH findings
+- Key insight: polymorphic engine threat overstated by secondary reporting — config stub only, behavioral regex survives regardless
+
+### 2026-03-29T09:45:00Z
+- Red/blue team iteration on paramiko/pkey.py attack
+  - **Attack:** DNS exfil via UDP sendto() bypassed fingerprint network detection (only checked urlopen/connect/getaddrinfo)
+  - Socket tuple IP ("15.204.59.61", 53) bypassed _HARDCODED_IP_RE (only matched http:// URLs)
+  - At max_targets ≤ 7, pkey.py escaped LLM review entirely (2 uncertainty signals, below auto-LLM threshold)
+  - **Fixes:** Added sendto/sendall/sendmsg to fingerprint detection, _SOCKET_IP_RE for tuple IPs,
+    behavioral:dns_exfiltration detector (struct.pack + SOCK_DGRAM + sendto), HIGH behavioral → priority 85
+  - 315 tests passing, 0% FP, 60% detection rate maintained
+
 ### 2026-03-26T04:00:00Z
 - Implemented repo analysis: RepoScanner, source heuristic detectors, /analyze skill
   - 5 source code detectors: obfuscation, suspicious imports, embedded payloads, dependency risks, secrets

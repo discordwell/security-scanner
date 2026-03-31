@@ -380,6 +380,12 @@ def select_targets(
                 "findings": findings_summary,
                 "uncertainty_signals": unresolved,
             })
+        # Priority 85: Files with HIGH behavioral or network findings (dns exfil, credential theft)
+        elif has_high and any(o.category.startswith("behavioral:") for o in f.observations):
+            _add(f.path, "suspicious_source", 85, {
+                "findings": findings_summary,
+                "high_behavioral": True,
+            })
         # Priority 75: Anomalous files (context mismatch with directory peers)
         elif f.metadata.get("anomaly_score", 0) >= 0.7:
             _add(f.path, "suspicious_source", 75, {

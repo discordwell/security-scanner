@@ -124,8 +124,8 @@ class _FingerprintVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call):
         func_name = self._get_call_name(node)
         if func_name:
-            # Network calls
-            if any(n in func_name for n in ("urlopen", "request", "fetch", "connect", "getaddrinfo")):
+            # Network calls (including raw socket send methods)
+            if any(n in func_name for n in ("urlopen", "request", "fetch", "connect", "getaddrinfo", "sendto", "sendall", "sendmsg")):
                 self.fp.makes_network_calls = True
             # Home directory access via expanduser/Path.home
             if any(n in func_name for n in ("expanduser", "Path.home")):

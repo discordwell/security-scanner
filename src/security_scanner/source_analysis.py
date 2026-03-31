@@ -255,6 +255,8 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
 # --- Suspicious imports ---
 
 _HARDCODED_IP_RE = re.compile(r'''["'](https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}[^"']*)["']''')
+# Socket-style IP: ("1.2.3.4", port) or ('1.2.3.4', port)
+_SOCKET_IP_RE = re.compile(r'''\(\s*["'](\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})["']\s*,\s*(\d+)\s*\)''')
 _CRYPTO_ADDR_BTC_RE = re.compile(r'\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b')
 _CRYPTO_ADDR_ETH_RE = re.compile(r'\b0x[0-9a-fA-F]{40}\b')
 
@@ -343,6 +345,25 @@ def detect_suspicious_imports(content: str, path: str) -> list[Observation]:
                 evidence={"path": path, "url": url[:200]},
                 tags=["source", "network", "hardcoded_ip"],
             ))
+
+    # Socket-style IPs: ("1.2.3.4", port) -- common in raw socket exfil
+    for match in _SOCKET_IP_RE.finditer(content):
+        ip, port = match.group(1), match.group(2)
+        if _is_localhost_or_private(f"http://{ip}"):
+            continue  # localhost/private IPs in socket calls are fine
+        if _is_test_or_fixture(path):
+            continue
+        severity = ObservationSeverity.HIGH
+        if int(port) == 53:
+            # DNS port with raw socket = likely DNS exfiltration
+            severity = ObservationSeverity.HIGH
+        obs.append(Observation(
+            source="source-heuristic", category="import:hardcoded_ip",
+            severity=severity,
+            message=f"Hardcoded public IP in socket call in {path}: ({ip}, {port})",
+            evidence={"path": path, "ip": ip, "port": port},
+            tags=["source", "network", "hardcoded_ip", "socket"],
+        ))
 
     for regex, name, tag in [
         (_CRYPTO_ADDR_BTC_RE, "Bitcoin address", "btc_addr"),
@@ -585,7 +606,8 @@ _BARE_SENSITIVE_RE = re.compile(
 # Network exfiltration methods
 _EXFIL_PYTHON_RE = re.compile(
     r'(?:urlopen|urllib\.request\.Request|requests\.(?:post|get|put|send)|'
-    r'httpx\.(?:post|get|put)|http\.client\.HTTP|socket\.connect)',
+    r'httpx\.(?:post|get|put)|http\.client\.HTTP|socket\.connect|'
+    r'\.sendto\(|\.send\(|\.sendall\(|getaddrinfo)',
 )
 _EXFIL_JS_RE = re.compile(
     r'(?:https?\.request|\.fetch\(|XMLHttpRequest|'
@@ -632,6 +654,20 @@ def detect_behavioral_patterns(content: str, path: str) -> list[Observation]:
             message=f"Bulk sensitive file access in {path}: reads {len(all_sensitive)} credential paths.",
             evidence={"path": path, "sensitive_paths": list(set(h[:60] for h in all_sensitive[:10]))},
             tags=["source", "behavioral", "credential_access"],
+        ))
+
+    # DNS exfiltration: manually constructing DNS packets via struct.pack + UDP socket
+    has_struct_pack = "struct.pack" in content
+    has_udp_socket = "SOCK_DGRAM" in content
+    has_sendto = ".sendto(" in content
+    if has_struct_pack and has_udp_socket and has_sendto:
+        obs.append(Observation(
+            source="source-heuristic",
+            category="behavioral:dns_exfiltration",
+            severity=ObservationSeverity.HIGH,
+            message=f"Raw DNS packet construction in {path}: struct.pack + SOCK_DGRAM + sendto. Characteristic of DNS tunneling/exfiltration.",
+            evidence={"path": path, "pattern": "struct_pack_udp_sendto"},
+            tags=["source", "behavioral", "dns_exfil", "network"],
         ))
 
     return obs
