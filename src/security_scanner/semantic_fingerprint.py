@@ -218,8 +218,10 @@ class _FingerprintVisitor(ast.NodeVisitor):
 
 
 def _fingerprint_from_text(content: str, fp: SemanticFingerprint):
-    """Simple text-based fingerprint for non-Python files."""
+    """Text-based fingerprint for non-Python files (JS, C/C++, Obj-C, Go, Rust, etc.)."""
     lower = content.lower()
+
+    # --- JS patterns (original) ---
     if any(kw in lower for kw in ("require(", "import ", "fetch(", "xmlhttprequest")):
         if any(kw in lower for kw in ("http", "fetch(", "request", "socket")):
             fp.makes_network_calls = True
@@ -229,3 +231,59 @@ def _fingerprint_from_text(content: str, fp: SemanticFingerprint):
     if "child_process" in lower or "exec(" in lower:
         fp.uses_exec = True
         fp.imports_exec.append("(text-detected)")
+
+    # --- Polyglot network APIs ---
+    _net_apis = (
+        "nsurlsession", "nsurlconnection", "datataskwith",
+        "curl_easy_perform", "curl_easy_init",
+        "http.get(", "http.post(", "http.newrequest",
+        "net.dial", "net.listen",
+        "reqwest::", "hyper::client",
+        "httpclient", "webclient",
+        "winhttpopen", "internetopen",
+        "cfhoststartinforesolution",
+    )
+    if any(api in lower for api in _net_apis):
+        fp.makes_network_calls = True
+        fp.imports_network.append("(polyglot-detected)")
+
+    # --- Polyglot home directory access ---
+    _home_apis = (
+        "nshomedirectory", "os.userhomedir", "dirs::home_dir",
+        "home_dir()", "getpwuid",
+        "shgetfolderpath",
+    )
+    if any(api in lower for api in _home_apis):
+        fp.reads_home_dir = True
+
+    # --- Polyglot environment variable access ---
+    if "getenv(" in lower or "os.getenv(" in lower or "std::env::var" in lower:
+        fp.accesses_env_other = True
+    if "nsprocessinfo" in lower and "environment" in lower:
+        fp.accesses_env_other = True
+    if any(pat in content for pat in ('getenv("HOME")', "getenv('HOME')", 'Getenv("HOME")')):
+        fp.accesses_env_home = True
+        fp.reads_home_dir = True
+
+    # --- Polyglot file I/O ---
+    _file_apis = (
+        "dataWithContentsOfFile", "contentsOfFile",
+        "stringWithContentsOfFile", "writeToFile",
+        "os.ReadFile", "ioutil.ReadFile",
+        "std::fs::read", "std::ifstream",
+        "fopen(", "fread(",
+    )
+    if any(api in content for api in _file_apis):
+        fp.reads_files = True
+        fp.uses_open = True
+
+    # --- Polyglot exec/system ---
+    _exec_apis = (
+        "system(", "popen(",
+        "exec.command", "std::process::command",
+        "nsapplescript", "nstask",
+        "createprocess",
+    )
+    if any(api in lower for api in _exec_apis):
+        fp.uses_exec = True
+        fp.imports_exec.append("(polyglot-detected)")

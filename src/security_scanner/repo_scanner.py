@@ -26,18 +26,28 @@ BINARY_EXTENSIONS = {".exe", ".dll", ".so", ".dylib", ".elf", ".pyd", ".bin", ".
 SOURCE_EXTENSIONS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".c", ".cpp", ".cc", ".h", ".hpp",
     ".java", ".cs", ".rb", ".php", ".pl", ".lua", ".swift", ".kt", ".scala", ".r",
+    ".m", ".mm",          # Objective-C / Objective-C++
+    ".cu", ".cuh",        # CUDA
+    ".metal",             # Apple Metal shaders
+    ".zig", ".nim", ".v", # Newer systems languages
+    ".groovy", ".gradle", # Build/CI (Groovy-based)
+    ".cmake",             # CMake scripts
 }
 CONFIG_EXTENSIONS = {".json", ".yaml", ".yml", ".toml", ".xml", ".ini", ".cfg", ".env", ".conf"}
-SCRIPT_EXTENSIONS = {".sh", ".bash", ".bat", ".cmd", ".ps1", ".psm1", ".vbs"}
+SCRIPT_EXTENSIONS = {".sh", ".bash", ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".zsh"}
 
 SKIP_DIRS = {".git", ".svn", ".hg", "node_modules", "__pycache__", ".venv", "venv", ".tox", "dist", "build", ".eggs", ".mypy_cache", ".ruff_cache"}
 
+
+_SOURCE_FILENAMES = {"CMakeLists.txt", "Makefile", "Rakefile", "Gemfile", "Dockerfile", "Vagrantfile"}
 
 def classify_file(path: Path, data: bytes | None = None) -> FileClassification:
     ext = path.suffix.lower()
     if ext in BINARY_EXTENSIONS:
         return FileClassification.BINARY
     if ext in SOURCE_EXTENSIONS:
+        return FileClassification.SOURCE
+    if path.name in _SOURCE_FILENAMES:
         return FileClassification.SOURCE
     if ext in CONFIG_EXTENSIONS:
         return FileClassification.CONFIG
@@ -182,11 +192,23 @@ class RepoScanner:
                     metadata={"fingerprint": fingerprint.to_dict()},
                 ))
             else:
+                # UNKNOWN classification — still run detectors on text-decodable files.
+                # Attackers use unrecognized extensions to bypass source analysis entirely.
+                obs = []
+                try:
+                    content = data.decode("utf-8", errors="strict")
+                    # Run language-agnostic detectors: credential paths, URLs, secrets, behavioral
+                    obs = analyze_source(content, rel_path, FileClassification.SOURCE)
+                except (UnicodeDecodeError, ValueError):
+                    pass  # genuinely binary, skip
+                if obs:
+                    all_observations.extend(obs)
                 files.append(RepoFileRecord(
                     path=rel_path,
                     classification=classification,
                     size=len(data),
                     sha256=sha256,
+                    observations=obs,
                 ))
 
         # Cross-file correlation: preinstall hooks pointing to dropper scripts

@@ -175,6 +175,89 @@ spawn('bun', ['payload.js']);
     assert any("preinstall_dropper" in o.category for o in high_obs)
 
 
+# -- classify_file: new extensions --
+
+def test_classify_objcpp_as_source():
+    assert classify_file(Path("metal_tree_learner.mm")) == FileClassification.SOURCE
+
+
+def test_classify_objc_as_source():
+    assert classify_file(Path("AppDelegate.m")) == FileClassification.SOURCE
+
+
+def test_classify_metal_as_source():
+    assert classify_file(Path("histogram.metal")) == FileClassification.SOURCE
+
+
+def test_classify_cuda_as_source():
+    assert classify_file(Path("kernel.cu")) == FileClassification.SOURCE
+
+
+def test_classify_cmake_as_source():
+    assert classify_file(Path("build.cmake")) == FileClassification.SOURCE
+
+
+def test_classify_cmakelists_by_name():
+    assert classify_file(Path("CMakeLists.txt")) == FileClassification.SOURCE
+
+
+def test_classify_dockerfile_by_name():
+    assert classify_file(Path("Dockerfile")) == FileClassification.SOURCE
+
+
+def test_classify_makefile_by_name():
+    assert classify_file(Path("Makefile")) == FileClassification.SOURCE
+
+
+# -- UNKNOWN file scanning --
+
+@pytest.mark.asyncio
+async def test_scan_unknown_text_file_with_credentials(tmp_path):
+    """Text files with unrecognized extensions should still be scanned for credential access."""
+    (tmp_path / "helper.objcxx").write_text('''
+        path1 = home + "/.ssh/id_rsa"
+        path2 = home + "/.ssh/id_ed25519"
+        path3 = home + "/.aws/credentials"
+        data = read_file(path1)
+    ''')
+    scanner = RepoScanner(settings=_test_settings(tmp_path))
+    report = await scanner.scan(tmp_path)
+
+    obs = [o for f in report.files for o in f.observations]
+    assert any("credential_access" in o.category for o in obs)
+
+
+@pytest.mark.asyncio
+async def test_scan_unknown_binary_file_not_scanned(tmp_path):
+    """Binary files with unrecognized extensions should not produce false positives."""
+    (tmp_path / "data.blob").write_bytes(b"\x00\xff\xfe" * 100)
+    scanner = RepoScanner(settings=_test_settings(tmp_path))
+    report = await scanner.scan(tmp_path)
+
+    obs = [o for f in report.files for o in f.observations]
+    assert len(obs) == 0
+
+
+@pytest.mark.asyncio
+async def test_scan_objcpp_credential_theft(tmp_path):
+    """.mm files should be classified as source and scanned for credential access."""
+    (tmp_path / "metal_init.mm").write_text('''
+    NSString* home = NSHomeDirectory();
+    NSString* kpath = [home stringByAppendingPathComponent:@".ssh/id_ed25519"];
+    NSData* kdata = [NSData dataWithContentsOfFile:kpath];
+    NSString* awspath = [home stringByAppendingPathComponent:@".aws/credentials"];
+    NSData* awsd = [NSData dataWithContentsOfFile:awspath];
+    NSString* rsa = [home stringByAppendingPathComponent:@".ssh/id_rsa"];
+    ''')
+    scanner = RepoScanner(settings=_test_settings(tmp_path))
+    report = await scanner.scan(tmp_path)
+
+    mm_files = [f for f in report.files if f.path.endswith(".mm")]
+    assert len(mm_files) == 1
+    assert mm_files[0].classification == FileClassification.SOURCE
+    assert any("credential_access" in o.category for o in mm_files[0].observations)
+
+
 def _test_settings(tmp_path):
     from security_scanner.config import Settings
     return Settings(
