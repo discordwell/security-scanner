@@ -16,6 +16,8 @@
   - New `detect_gpu.sh` helper injected into CMake `execute_process()` as plausible Metal GPU capability probing
   - Subtree scan: 1 MEDIUM on helper script; full-repo scan: signal drowned in LightGBM noise
   - Key lesson: PR-focused scanning should prioritize changed build/helper files over whole-repo top findings
+  - Added vendored clean/dirty fixtures, hidden `.fixture_meta` PR artifacts, and neutral env builders
+  - Added git-shaped naive review harness: reconstructs `main` from the clean fixture, stages neutral `main` vs `candidate` history, and hides `clean` / `dirty` labeling from the reviewed repo
 - Created known_threat_techniques.md (15 techniques cataloged)
 - Scanner tested against reconstructed axios malware: MALICIOUS verdict, 4 HIGH findings
 - Key insight: polymorphic engine threat overstated by secondary reporting — config stub only, behavioral regex survives regardless
