@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     angr_max_states: int = 256
     angr_max_functions: int = 8
 
+    # EMBER ML classification
+    ember_model_path: Path = Field(default_factory=lambda: Path.cwd() / "data" / "models" / "ember_lgbm.txt")
+    ember_threshold_low: float = 0.3
+    ember_threshold_medium: float = 0.7
+    ember_threshold_high: float = 0.9
+    ember_threshold_critical: float = 0.95
+
     # Database
     database_url: str = ""
 

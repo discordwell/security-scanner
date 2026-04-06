@@ -37,6 +37,10 @@ postgres = [
 worker = [
   "arq>=0.26.0,<1.0.0",
 ]
+ml = [
+  "ember @ git+https://github.com/elastic/ember.git",
+  "lightgbm>=4.0.0,<5.0.0",
+]
 
 [build-system]
 requires = ["setuptools>=69.0.0", "wheel"]

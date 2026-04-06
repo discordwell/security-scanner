@@ -28,9 +28,9 @@ The system is designed to run locally with file-backed storage while keeping ada
         │                      │
         │               ┌──────┼──────────┐
         │               │      │          │
-        │          ┌────▼──┐ ┌─▼───┐ ┌───▼────┐
-        │          │ YARA  │ │Capa │ │Ghidra  │
-        │          └───────┘ └─────┘ └────────┘
+        │          ┌────▼──┐ ┌──▼──┐ ┌─▼───┐ ┌───▼────┐
+        │          │ YARA  │ │EMBER│ │Capa │ │Ghidra  │
+        │          └───────┘ └─────┘ └─────┘ └────────┘
         │
   ┌─────▼─────┐        ┌─────────────┐
   │  Dynamic   │        │  Symbolic   │
@@ -65,6 +65,7 @@ src/security_scanner/
 ├── adapters/
 │   ├── types.py        # AdapterResult dataclass
 │   ├── yara.py         # Pattern-based heuristic scanner
+│   ├── ember.py        # EMBER feature extraction + LightGBM ML classifier
 │   ├── ghidra.py       # Disassembly triage and function promotion
 │   ├── capa.py         # Capability detection from strings
 │   ├── provenance.py   # Signature/provenance validation
@@ -83,7 +84,7 @@ src/security_scanner/
 
 1. **Submission** - Binary uploaded via `POST /submissions` with optional policy and provenance metadata.
 2. **Ingest** - File is content-addressed (SHA256), stored, format-detected, and recursively unpacked if it's an archive.
-3. **Static Analysis** - YARA-style pattern matching, capability detection, disassembly triage, and provenance checks run against each artifact.
+3. **Static Analysis** - YARA pattern matching, EMBER ML classification, capability detection, disassembly triage, and provenance checks run against each artifact.
 4. **Baseline Comparison** - Artifacts are compared against the trusted baseline corpus using chunk-hash and function-hash similarity (Jaccard distance).
 5. **Dynamic Analysis** - Artifacts are submitted to sandboxes for behavioral analysis (currently stubbed).
 6. **Symbolic Execution** - Suspicious regions are queued for targeted symbolic execution (currently stubbed).
@@ -120,10 +121,11 @@ Each static analysis adapter supports a real tool backend with automatic fallbac
 | Adapter | Real Tool | Fallback | Config |
 |---------|-----------|----------|--------|
 | YARA | `yara-python` library, rules from `data/yara_rules/` | Pattern-based string matching | `yara_rules_dir` in Settings |
+| EMBER | `ember` feature extraction + `lightgbm` inference | Entropy + byte-histogram + packer detection | `ember_model_path`, `ember_threshold_*` in Settings |
 | capa | `capa` CLI (JSON output via subprocess) | String-based capability detection | `capa_cmd` in Settings |
 | Ghidra | `analyzeHeadless` via subprocess + `scripts/ghidra_export.py` | Suspicious region promotion | `ghidra_cmd` in Settings |
 
-When a real tool is unavailable or fails, the adapter transparently falls back to heuristics. The `mode` field in `ToolExecution.details` indicates which backend was used (`"yara-python"`, `"capa-cli"`, `"ghidra-headless"`, or `"heuristic"`).
+When a real tool is unavailable or fails, the adapter transparently falls back to heuristics. The `mode` field in `ToolExecution.details` indicates which backend was used (`"yara-python"`, `"ember"`, `"capa-cli"`, `"ghidra-headless"`, or `"heuristic"`).
 
 Ghidra emits `coverage_gap` observations when the number of functions exceeds the analysis limit or decompilation fails, which feeds into the fusion verdict logic.
 

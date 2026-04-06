@@ -2,6 +2,20 @@
 
 ## Session Summaries
 
+### 2026-04-05T19:00:00Z
+- Added EMBER + LightGBM ML classifier adapter for executable malware detection
+  - New `EmberAdapter` in `src/security_scanner/adapters/ember.py`
+  - Follows existing adapter pattern: graceful degradation with heuristic fallback
+  - ML path: EMBER v2 feature extraction (2,381 dims) → LightGBM inference → score → severity
+  - Heuristic fallback: entropy analysis + byte-histogram + packer signature detection
+  - Score thresholds: <0.3 skip, ≥0.3 LOW, ≥0.7 MEDIUM, ≥0.9 HIGH, ≥0.95 CRITICAL
+  - Integrated into static analysis pipeline between YARA and capa
+  - 21 new tests (all passing), 357 total tests passing with 0 regressions
+  - Download script at `scripts/download_ember_model.py` for pre-trained model
+  - Currently PE-only for ML path; non-PE returns INFO; heuristic works on any binary
+- Context: pivoting toward executable/binary analysis (user's father at Sandia prioritizes .exe detection)
+- SOTA research saved to `research/executable-malware-detection-sota.md`
+
 ### 2026-03-31T11:30:00Z
 - SSH banner exfil attack on paramiko (blackhat)
   - Inject into pkey.py (collection) + transport.py (exfil): private key bytes → base64 → SSH version string + MSG_IGNORE post-auth

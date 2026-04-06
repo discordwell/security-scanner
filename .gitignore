@@ -9,3 +9,4 @@ data/artifacts/
 *.db
 .env
 eval/results.json
+data/models/
