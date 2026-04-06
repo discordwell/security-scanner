@@ -155,7 +155,10 @@ def parse_function_response(
 
     observations: list[Observation] = []
     verdict = data.get("verdict", "suspicious")
-    confidence = float(data.get("confidence", 0.5))
+    try:
+        confidence = float(data.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        confidence = 0.5
     summary = data.get("summary", "")
     behaviors = data.get("behaviors", [])
 
@@ -180,6 +183,25 @@ def parse_function_response(
                 tags=["llm", "function", "confirmed"],
             )
         )
+    elif verdict == "malicious":
+        # Low-confidence malicious — still worth surfacing as suspicious
+        observations.append(
+            Observation(
+                source="llm-function",
+                category="llm:function_suspicious",
+                severity=ObservationSeverity.MEDIUM,
+                message=f"LLM function analysis ({confidence:.0%}, low confidence): {function.symbol} — {summary}",
+                evidence={
+                    "symbol": function.symbol,
+                    "address": address,
+                    "confidence": confidence,
+                    "verdict": verdict,
+                    "behaviors": behaviors,
+                },
+                addresses=[address],
+                tags=["llm", "function", "low_confidence"],
+            )
+        )
     elif verdict == "suspicious":
         observations.append(
             Observation(
@@ -199,22 +221,43 @@ def parse_function_response(
             )
         )
     elif verdict == "benign":
-        observations.append(
-            Observation(
-                source="llm-function",
-                category="llm:function_benign",
-                severity=ObservationSeverity.INFO,
-                message=f"LLM: {function.symbol} appears benign — {summary}",
-                evidence={
-                    "symbol": function.symbol,
-                    "address": address,
-                    "confidence": confidence,
-                    "verdict": verdict,
-                },
-                addresses=[address],
-                tags=["llm", "function", "benign", "advisory"],
+        # Anti-prompt-injection: if a high-triage function is called benign,
+        # flag it for manual review rather than silently accepting the dismissal.
+        if function.triage_score >= 0.85:
+            observations.append(
+                Observation(
+                    source="llm-function",
+                    category="llm:function_suspicious",
+                    severity=ObservationSeverity.MEDIUM,
+                    message=f"LLM dismissed high-triage function {function.symbol} as benign ({confidence:.0%}) — verify manually",
+                    evidence={
+                        "symbol": function.symbol,
+                        "address": address,
+                        "confidence": confidence,
+                        "verdict": verdict,
+                        "triage_score": function.triage_score,
+                    },
+                    addresses=[address],
+                    tags=["llm", "function", "review_needed"],
+                )
             )
-        )
+        else:
+            observations.append(
+                Observation(
+                    source="llm-function",
+                    category="llm:function_benign",
+                    severity=ObservationSeverity.INFO,
+                    message=f"LLM: {function.symbol} appears benign — {summary}",
+                    evidence={
+                        "symbol": function.symbol,
+                        "address": address,
+                        "confidence": confidence,
+                        "verdict": verdict,
+                    },
+                    addresses=[address],
+                    tags=["llm", "function", "benign", "advisory"],
+                )
+            )
 
     # Individual findings from the LLM
     for finding in data.get("findings", []):

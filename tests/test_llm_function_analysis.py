@@ -57,21 +57,25 @@ def _make_artifact(functions: list[FunctionSummary] | None = None) -> ArtifactRe
     )
 
 
+_SENTINEL = object()
+
+
 def _make_llm_response(
     verdict: str = "malicious",
     confidence: float = 0.9,
     summary: str = "Shellcode loader",
     behaviors: list[str] | None = None,
-    findings: list[dict] | None = None,
+    findings: list[dict] | object = _SENTINEL,
 ) -> str:
+    default_findings = [
+        {"severity": "high", "category": "process_injection", "message": "Allocates executable memory and copies shellcode"}
+    ]
     data = {
         "verdict": verdict,
         "confidence": confidence,
         "summary": summary,
         "behaviors": behaviors or ["process_injection"],
-        "findings": findings or [
-            {"severity": "high", "category": "process_injection", "message": "Allocates executable memory and copies shellcode"}
-        ],
+        "findings": default_findings if findings is _SENTINEL else findings,
     }
     return f"Analysis:\n```json\n{json.dumps(data, indent=2)}\n```"
 
@@ -185,13 +189,15 @@ def test_parse_benign_response():
     assert "benign" in verdict_obs.tags
 
 
-def test_parse_malicious_low_confidence_no_high_observation():
-    """Malicious verdict below 0.7 confidence should not produce HIGH observation."""
+def test_parse_malicious_low_confidence_produces_medium():
+    """Malicious verdict below 0.7 confidence should produce MEDIUM, not HIGH."""
     func = _make_function()
-    response = _make_llm_response(verdict="malicious", confidence=0.4)
+    response = _make_llm_response(verdict="malicious", confidence=0.4, findings=[])
     observations = parse_function_response(response, func)
-    high_obs = [o for o in observations if o.severity == ObservationSeverity.HIGH and o.category == "llm:function_malicious"]
-    assert len(high_obs) == 0
+    assert len(observations) == 1
+    assert observations[0].severity == ObservationSeverity.MEDIUM
+    assert observations[0].category == "llm:function_suspicious"
+    assert "low confidence" in observations[0].message
 
 
 def test_parse_findings_extracted():
@@ -205,6 +211,36 @@ def test_parse_findings_extracted():
     categories = [o.category for o in observations]
     assert "llm:c2" in categories
     assert "llm:evasion" in categories
+
+
+def test_parse_benign_high_triage_flagged_for_review():
+    """Benign verdict on a high-triage function should flag for manual review."""
+    func = _make_function(triage_score=0.9)
+    response = _make_llm_response(verdict="benign", confidence=0.95, summary="Normal init")
+    observations = parse_function_response(response, func)
+    assert len(observations) >= 1
+    review_obs = observations[0]
+    assert review_obs.severity == ObservationSeverity.MEDIUM
+    assert "review_needed" in review_obs.tags
+    assert "verify manually" in review_obs.message
+
+
+def test_parse_benign_low_triage_accepted():
+    """Benign verdict on a low-triage function is accepted as INFO."""
+    func = _make_function(triage_score=0.5)
+    response = _make_llm_response(verdict="benign", confidence=0.95, summary="Normal init")
+    observations = parse_function_response(response, func)
+    assert observations[0].severity == ObservationSeverity.INFO
+    assert "benign" in observations[0].tags
+
+
+def test_parse_non_numeric_confidence_defaults():
+    """Non-numeric confidence value should not crash, defaults to 0.5."""
+    func = _make_function()
+    response = '```json\n{"verdict": "suspicious", "confidence": "high", "summary": "test", "behaviors": [], "findings": []}\n```'
+    observations = parse_function_response(response, func)
+    assert len(observations) >= 1
+    assert observations[0].evidence["confidence"] == 0.5
 
 
 def test_parse_no_json_block():
