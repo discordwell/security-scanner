@@ -22,6 +22,17 @@
   - Parses structured JSON response into Observations flowing into fusion
   - Integrated into service.py between symbolic execution and fusion (opt-in, disabled by default)
   - 22 new tests, 379 total passing with 0 regressions
+- Added cross-signal LLM fusion verdict reasoning
+  - FusionPipeline now optionally uses Claude to synthesize ALL signals (YARA, EMBER, capa, Ghidra, angr, LLM-function, provenance, baseline)
+  - LLM can confirm, upgrade (kill chain detection), or downgrade (false positive dismissal) the rule-based verdict
+  - Rule-based verdict always preserved in evidence for auditability
+  - 15 new fusion tests, all passing
+- Added auto YARA rule generation from confirmed malicious samples
+  - Post-verdict hook: MALICIOUS + high confidence → Claude generates YARA rules
+  - Rules saved to `data/yara_rules/auto/` → automatically picked up by YaraAdapter
+  - Creates self-improving feedback loop: LLM detection → YARA rule → microsecond future detection
+  - 14 new YARA generation tests, all passing
+- 413 total tests passing, 0 regressions
 - Context: pivoting toward executable/binary analysis (user's father at Sandia prioritizes .exe detection)
 - SOTA research saved to `research/executable-malware-detection-sota.md`
 

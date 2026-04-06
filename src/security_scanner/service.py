@@ -8,11 +8,12 @@ from typing import Any
 from .adapters.anthropic_llm import HAS_ANTHROPIC
 from .baselines import build_baseline_record, compare_against_baselines
 from .config import Settings
-from .models import ArtifactRecord, BaselineRecord, ExecutionPolicy, ProvenanceBundle, SubmissionRecord, SubmissionStatus, VerdictRecord
+from .models import ArtifactRecord, BaselineRecord, ExecutionPolicy, ProvenanceBundle, SubmissionRecord, SubmissionStatus, VerdictRecord, VerdictState
 from .pipeline.dynamic_analysis import DynamicAnalysisPipeline
 from .pipeline.fusion import FusionPipeline
 from .pipeline.ingest import IngestPipeline
 from .pipeline.llm_function_analysis import LLMFunctionAnalysisPipeline
+from .pipeline.yara_generation import YaraGenerationPipeline
 from .pipeline.static_analysis import StaticAnalysisPipeline
 from .pipeline.symbolic import SymbolicPipeline
 from .repository import JsonRepository
@@ -92,6 +93,7 @@ class AnalysisService:
         symbolic: SymbolicPipeline | None = None,
         llm_function: LLMFunctionAnalysisPipeline | None = None,
         fusion: FusionPipeline | None = None,
+        yara_gen: YaraGenerationPipeline | None = None,
         settings: Settings | None = None,
     ) -> None:
         settings = settings or Settings()
@@ -119,7 +121,36 @@ class AnalysisService:
                 max_functions=settings.llm_function_max_functions,
                 max_code_length=settings.llm_function_max_code_length,
             )
-        self.fusion = fusion or FusionPipeline()
+        if fusion is not None:
+            self.fusion = fusion
+        elif settings.llm_fusion_enabled and HAS_ANTHROPIC and settings.llm_api_key:
+            from .adapters.anthropic_llm import AnthropicLLMAdapter
+
+            fusion_adapter = AnthropicLLMAdapter(
+                api_key=settings.llm_api_key,
+                model=settings.llm_model,
+                max_tokens=settings.llm_max_tokens_per_file,
+                timeout=settings.llm_timeout,
+            )
+            self.fusion = FusionPipeline(adapter=fusion_adapter, llm_budget=settings.llm_fusion_budget)
+        else:
+            self.fusion = FusionPipeline()
+        self.yara_gen = yara_gen
+        if self.yara_gen is None and settings.yara_auto_generation_enabled and HAS_ANTHROPIC and settings.llm_api_key:
+            from .adapters.anthropic_llm import AnthropicLLMAdapter
+
+            yara_adapter = AnthropicLLMAdapter(
+                api_key=settings.llm_api_key,
+                model=settings.llm_model,
+                max_tokens=settings.llm_max_tokens_per_file,
+                timeout=settings.llm_timeout,
+            )
+            self.yara_gen = YaraGenerationPipeline(
+                adapter=yara_adapter,
+                rules_dir=settings.yara_auto_rules_dir,
+                budget=settings.yara_generation_budget,
+                min_confidence=settings.yara_generation_min_confidence,
+            )
 
     async def submit(
         self,
@@ -176,9 +207,17 @@ class AnalysisService:
             analyzed_artifacts.append(artifact)
 
         root_artifact = next(a for a in analyzed_artifacts if a.sha256 == submission.root_sha256)
-        verdict = self.fusion.verdict_for(root_artifact, analyzed_artifacts)
+        if self.fusion.has_llm:
+            verdict = await self.fusion.verdict_for_with_llm(root_artifact, analyzed_artifacts)
+        else:
+            verdict = self.fusion.verdict_for(root_artifact, analyzed_artifacts)
         logger.info("Verdict for %s: %s", filename, verdict.state.value)
         await self.repository.save_verdict(verdict)
+
+        if self.yara_gen is not None and verdict.state == VerdictState.MALICIOUS:
+            rule_names = await self.yara_gen.generate(root_artifact, verdict)
+            if rule_names:
+                logger.info("Auto-generated %d YARA rules: %s", len(rule_names), ", ".join(rule_names))
 
         submission.status = SubmissionStatus.COMPLETE
         submission.verdict_state = verdict.state

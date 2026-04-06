@@ -48,10 +48,15 @@ The system is designed to run locally with file-backed storage while keeping ada
   │ Analysis       │  → Claude API
   └───────┬────────┘
           │
-  ┌───────▼───┐
-  │  Fusion    │
-  │  Pipeline  │  → VerdictRecord
-  └────────────┘
+  ┌───────▼───────┐
+  │  Fusion        │  (rule-based + LLM reasoning)
+  │  Pipeline      │  → VerdictRecord
+  └───────┬────────┘
+          │
+  ┌───────▼───────┐
+  │ Auto YARA Gen  │  (if MALICIOUS, opt-in)
+  │ Pipeline       │  → data/yara_rules/auto/
+  └────────────────┘
 ```
 
 ## Directory Layout
@@ -83,7 +88,8 @@ src/security_scanner/
     ├── dynamic_analysis.py # Orchestrates CAPE, DRAKVUF
     ├── symbolic.py      # Orchestrates angr
     ├── llm_function_analysis.py  # LLM reasoning on decompiled functions
-    └── fusion.py        # Verdict generation from aggregated evidence
+    ├── fusion.py        # Verdict generation (rule-based + LLM reasoning)
+    └── yara_generation.py  # Auto YARA rule generation from malicious samples
 ```
 
 ## Data Flow
@@ -95,7 +101,8 @@ src/security_scanner/
 5. **Dynamic Analysis** - Artifacts are submitted to sandboxes for behavioral analysis (currently stubbed).
 6. **Symbolic Execution** - Suspicious regions are queued for targeted symbolic execution (currently stubbed).
 7. **LLM Function Analysis** - High-triage decompiled functions are sent to Claude for intent analysis (opt-in, requires `llm_function_analysis_enabled=true` + API key).
-8. **Fusion** - All observations, tool results, and baseline distances are aggregated into a verdict: `CLEAN`, `SUSPICIOUS`, `MALICIOUS`, or `INCONCLUSIVE`.
+8. **Fusion** - All observations, tool results, and baseline distances are aggregated into a verdict: `CLEAN`, `SUSPICIOUS`, `MALICIOUS`, or `INCONCLUSIVE`. When `llm_fusion_enabled=true`, Claude synthesizes all signals and can override the rule-based verdict with reasoning.
+9. **Auto YARA Generation** - When a sample is confirmed MALICIOUS with high LLM confidence, Claude generates YARA rules from its distinctive features. Rules are saved to `data/yara_rules/auto/` and automatically picked up by the YARA adapter on the next scan, creating a self-improving feedback loop.
 
 ## Storage
 

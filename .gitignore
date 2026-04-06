@@ -10,3 +10,4 @@ data/artifacts/
 .env
 eval/results.json
 data/models/
+data/yara_rules/auto/
