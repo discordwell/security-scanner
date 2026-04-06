@@ -5,11 +5,14 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from .adapters.anthropic_llm import HAS_ANTHROPIC
 from .baselines import build_baseline_record, compare_against_baselines
+from .config import Settings
 from .models import ArtifactRecord, BaselineRecord, ExecutionPolicy, ProvenanceBundle, SubmissionRecord, SubmissionStatus, VerdictRecord
 from .pipeline.dynamic_analysis import DynamicAnalysisPipeline
 from .pipeline.fusion import FusionPipeline
 from .pipeline.ingest import IngestPipeline
+from .pipeline.llm_function_analysis import LLMFunctionAnalysisPipeline
 from .pipeline.static_analysis import StaticAnalysisPipeline
 from .pipeline.symbolic import SymbolicPipeline
 from .repository import JsonRepository
@@ -87,8 +90,11 @@ class AnalysisService:
         static: StaticAnalysisPipeline | None = None,
         dynamic: DynamicAnalysisPipeline | None = None,
         symbolic: SymbolicPipeline | None = None,
+        llm_function: LLMFunctionAnalysisPipeline | None = None,
         fusion: FusionPipeline | None = None,
+        settings: Settings | None = None,
     ) -> None:
+        settings = settings or Settings()
         raw_repo = repository or JsonRepository()
         self.repository = _RepoAdapter(raw_repo)
         self.artifact_store = artifact_store or LocalArtifactStore()
@@ -96,6 +102,23 @@ class AnalysisService:
         self.static = static or StaticAnalysisPipeline()
         self.dynamic = dynamic or DynamicAnalysisPipeline()
         self.symbolic = symbolic or SymbolicPipeline()
+        self.llm_function = llm_function
+        if self.llm_function is None and settings.llm_function_analysis_enabled and HAS_ANTHROPIC and settings.llm_api_key:
+            from .adapters.anthropic_llm import AnthropicLLMAdapter
+
+            adapter = AnthropicLLMAdapter(
+                api_key=settings.llm_api_key,
+                model=settings.llm_model,
+                max_tokens=settings.llm_max_tokens_per_file,
+                timeout=settings.llm_timeout,
+            )
+            self.llm_function = LLMFunctionAnalysisPipeline(
+                adapter=adapter,
+                budget=settings.llm_function_analysis_budget,
+                min_triage_score=settings.llm_function_min_triage_score,
+                max_functions=settings.llm_function_max_functions,
+                max_code_length=settings.llm_function_max_code_length,
+            )
         self.fusion = fusion or FusionPipeline()
 
     async def submit(
@@ -147,6 +170,8 @@ class AnalysisService:
             )
             artifact = self.dynamic.analyze(artifact, policy, data=artifact_data)
             artifact = self.symbolic.analyze(artifact, policy, data=artifact_data)
+            if self.llm_function is not None:
+                artifact = await self.llm_function.analyze(artifact)
             await self.repository.save_artifact(artifact)
             analyzed_artifacts.append(artifact)
 

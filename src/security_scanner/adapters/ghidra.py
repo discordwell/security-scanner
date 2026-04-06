@@ -111,6 +111,7 @@ class GhidraAdapter:
                     reason=f"Ghidra function at {func['entry']}",
                     normalized_hash=normalized_hash,
                     decompiled=decompiled_src is not None,
+                    decompiled_code=decompiled_src,
                     evidence={
                         "size": func.get("size", 0),
                         "calling": func.get("calling", [])[:5],

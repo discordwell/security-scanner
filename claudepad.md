@@ -13,6 +13,15 @@
   - 21 new tests (all passing), 357 total tests passing with 0 regressions
   - Download script at `scripts/download_ember_model.py` for pre-trained model
   - Currently PE-only for ML path; non-PE returns INFO; heuristic works on any binary
+- Added LLM-powered decompiled function reasoning pipeline
+  - Fixed FunctionSummary: added `decompiled_code` field (was discarded after hashing)
+  - Updated Ghidra adapter to preserve decompiled C source through pipeline
+  - New `LLMFunctionAnalysisPipeline` in `pipeline/llm_function_analysis.py`
+  - Selects high-triage decompiled functions, sends to Claude with binary context
+  - Prompt asks for malicious behavior analysis (injection, C2, persistence, evasion, etc.)
+  - Parses structured JSON response into Observations flowing into fusion
+  - Integrated into service.py between symbolic execution and fusion (opt-in, disabled by default)
+  - 22 new tests, 379 total passing with 0 regressions
 - Context: pivoting toward executable/binary analysis (user's father at Sandia prioritizes .exe detection)
 - SOTA research saved to `research/executable-malware-detection-sota.md`
 

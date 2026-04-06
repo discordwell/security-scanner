@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     llm_triage_max_deep_dive: int = 5
     llm_triage_budget_tokens: int = 15_000
 
+    # LLM binary function analysis (requires anthropic SDK + API key)
+    llm_function_analysis_enabled: bool = False
+    llm_function_analysis_budget: int = 50_000
+    llm_function_min_triage_score: float = 0.5
+    llm_function_max_functions: int = 5
+    llm_function_max_code_length: int = 10_000
+
     # Auth & security
     require_auth: bool = False
     global_rate_limit: int = 120

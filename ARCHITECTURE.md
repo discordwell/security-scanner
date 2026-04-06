@@ -43,7 +43,12 @@ The system is designed to run locally with file-backed storage while keeping ada
  │CAPE│ │DRAKVUF│
  └────┘ └──────┘
         │
-  ┌─────▼─────┐
+  ┌─────▼─────────┐
+  │ LLM Function   │  (opt-in, async)
+  │ Analysis       │  → Claude API
+  └───────┬────────┘
+          │
+  ┌───────▼───┐
   │  Fusion    │
   │  Pipeline  │  → VerdictRecord
   └────────────┘
@@ -74,9 +79,10 @@ src/security_scanner/
 │   └── drakvuf.py      # Anti-evasion dynamic analysis (stub)
 └── pipeline/
     ├── ingest.py        # Recursive archive extraction + initial heuristics
-    ├── static_analysis.py  # Orchestrates YARA, Capa, Ghidra, Provenance
+    ├── static_analysis.py  # Orchestrates YARA, EMBER, Capa, Ghidra, Provenance
     ├── dynamic_analysis.py # Orchestrates CAPE, DRAKVUF
     ├── symbolic.py      # Orchestrates angr
+    ├── llm_function_analysis.py  # LLM reasoning on decompiled functions
     └── fusion.py        # Verdict generation from aggregated evidence
 ```
 
@@ -88,7 +94,8 @@ src/security_scanner/
 4. **Baseline Comparison** - Artifacts are compared against the trusted baseline corpus using chunk-hash and function-hash similarity (Jaccard distance).
 5. **Dynamic Analysis** - Artifacts are submitted to sandboxes for behavioral analysis (currently stubbed).
 6. **Symbolic Execution** - Suspicious regions are queued for targeted symbolic execution (currently stubbed).
-7. **Fusion** - All observations, tool results, and baseline distances are aggregated into a verdict: `CLEAN`, `SUSPICIOUS`, `MALICIOUS`, or `INCONCLUSIVE`.
+7. **LLM Function Analysis** - High-triage decompiled functions are sent to Claude for intent analysis (opt-in, requires `llm_function_analysis_enabled=true` + API key).
+8. **Fusion** - All observations, tool results, and baseline distances are aggregated into a verdict: `CLEAN`, `SUSPICIOUS`, `MALICIOUS`, or `INCONCLUSIVE`.
 
 ## Storage
 
@@ -149,6 +156,18 @@ When `angr` is installed (`pip install angr`) and `enable_symbolic_execution=tru
 5. Enforces per-function timeout (`angr_timeout_per_function`, default 60s) and state limit (`angr_max_states`, default 256)
 
 Falls back to a placeholder stub when angr is not installed.
+
+## LLM Function Analysis
+
+When enabled (`SCANNER_LLM_FUNCTION_ANALYSIS_ENABLED=true`) and an Anthropic API key is configured:
+
+1. After symbolic execution, functions with `decompiled_code` and `triage_score >= llm_function_min_triage_score` are selected (sorted by score, capped at `llm_function_max_functions`)
+2. Each function's decompiled C code is sent to Claude with binary context (format, strings, prior observations, call graph)
+3. Claude analyzes for malicious intent: process injection, C2, persistence, credential theft, evasion, exfiltration
+4. Responses are parsed into Observations (`source="llm-function"`) with structured JSON verdicts
+5. Token budget (`llm_function_analysis_budget`, default 50k) is tracked separately from source-file LLM analysis
+
+This stage is disabled by default and has no effect on the pipeline when off.
 
 ## Repository Analysis
 

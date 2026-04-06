@@ -92,6 +92,7 @@ class FunctionSummary(BaseModel):
     reason: str
     normalized_hash: str
     decompiled: bool = False
+    decompiled_code: str | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 
