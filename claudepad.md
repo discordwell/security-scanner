@@ -32,7 +32,17 @@
   - Rules saved to `data/yara_rules/auto/` → automatically picked up by YaraAdapter
   - Creates self-improving feedback loop: LLM detection → YARA rule → microsecond future detection
   - 14 new YARA generation tests, all passing
-- 413 total tests passing, 0 regressions
+- Added Triage cloud sandbox adapter (hatching.io)
+  - Real dynamic analysis without self-hosted infrastructure
+  - Submit/poll/report flow with signature, network IOC, config extraction, dropped file parsing
+  - Fixed event loop blocking bug: `dynamic.analyze()` now wrapped in `asyncio.to_thread`
+  - 9 new adapter tests
+- Built binary eval harness (eval/download_samples.py, eval/run_binary_eval.py, eval/metrics.py)
+  - Downloads labeled samples from MalwareBazaar API
+  - Runs samples through scanner, records verdicts vs ground truth
+  - Computes accuracy, precision, recall, F1, confusion matrix
+  - 9 new metrics tests
+- 431 total tests passing, 0 regressions
 - Context: pivoting toward executable/binary analysis (user's father at Sandia prioritizes .exe detection)
 - SOTA research saved to `research/executable-malware-detection-sota.md`
 

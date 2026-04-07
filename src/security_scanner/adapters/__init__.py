@@ -5,6 +5,7 @@ from .drakvuf import DrakvufAdapter
 from .ember import EmberAdapter
 from .ghidra import GhidraAdapter
 from .provenance import ProvenanceAdapter
+from .triage import TriageAdapter
 from .yara import YaraAdapter
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "EmberAdapter",
     "GhidraAdapter",
     "ProvenanceAdapter",
+    "TriageAdapter",
     "YaraAdapter",
 ]

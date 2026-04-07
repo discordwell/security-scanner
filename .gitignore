@@ -11,3 +11,5 @@ data/artifacts/
 eval/results.json
 data/models/
 data/yara_rules/auto/
+eval/samples/
+eval/results_binary.json

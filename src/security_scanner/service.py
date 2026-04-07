@@ -199,7 +199,7 @@ class AnalysisService:
                 claimed_product=claimed_product,
                 claimed_signer=provenance_bundle.claimed_signer,
             )
-            artifact = self.dynamic.analyze(artifact, policy, data=artifact_data)
+            artifact = await asyncio.to_thread(self.dynamic.analyze, artifact, policy, artifact_data)
             artifact = self.symbolic.analyze(artifact, policy, data=artifact_data)
             if self.llm_function is not None:
                 artifact = await self.llm_function.analyze(artifact)

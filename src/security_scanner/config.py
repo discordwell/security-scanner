@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379"
     use_task_queue: bool = False
 
+    # Triage cloud sandbox
+    triage_api_key: str = ""
+    triage_api_url: str = "https://tria.ge"
+    triage_poll_interval: int = 15
+    triage_timeout: int = 600
+
     # Repo analysis
     repo_max_files: int = 5000
     repo_max_file_size: int = 10 * 1024 * 1024

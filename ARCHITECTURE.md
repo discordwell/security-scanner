@@ -81,7 +81,8 @@ src/security_scanner/
 │   ├── provenance.py   # Signature/provenance validation
 │   ├── angr.py         # Symbolic execution (stub)
 │   ├── cape.py         # Dynamic sandbox detonation (stub)
-│   └── drakvuf.py      # Anti-evasion dynamic analysis (stub)
+│   ├── drakvuf.py      # Anti-evasion dynamic analysis (stub)
+│   └── triage.py       # Hatching Triage cloud sandbox (live)
 └── pipeline/
     ├── ingest.py        # Recursive archive extraction + initial heuristics
     ├── static_analysis.py  # Orchestrates YARA, EMBER, Capa, Ghidra, Provenance
