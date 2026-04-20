@@ -237,9 +237,25 @@ class FusionPipeline:
         pending_actions: list[str] = []
         state = VerdictState.INCONCLUSIVE
 
+        # Attack-vector category prefix (everything before the first `:`), excluding
+        # purely-analytical prefixes that represent uncertainty rather than attack steps.
+        _NON_ATTACK_PREFIXES = {"unresolved", "ast", "coverage_gap", "llm"}
+        distinct_attack_vectors = {
+            obs.category.split(":", 1)[0] for obs in medium
+        } - _NON_ATTACK_PREFIXES
+
         if critical_or_high:
             state = VerdictState.MALICIOUS
             reasons.append("High-confidence static evidence indicates malicious behavior or tooling.")
+        elif len(medium) >= 3 and len(distinct_attack_vectors) >= 3:
+            # Evasion-tuned malware deliberately avoids any single HIGH signal.
+            # 3+ MEDIUMs spanning 3+ distinct attack vectors is a coherent attack chain.
+            state = VerdictState.MALICIOUS
+            reasons.append(
+                f"Multiple MEDIUM findings ({len(medium)}) across {len(distinct_attack_vectors)} "
+                f"distinct attack-vector categories ({', '.join(sorted(distinct_attack_vectors))}) "
+                f"indicate a coordinated attack chain."
+            )
         elif medium or root_artifact.baseline_diff.distance >= 0.2:
             state = VerdictState.SUSPICIOUS
             reasons.append("Static heuristics or baseline divergence require analyst review.")

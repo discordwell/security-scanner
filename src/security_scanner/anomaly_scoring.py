@@ -38,6 +38,18 @@ class AnomalyResult:
         }
 
 
+# Anomaly scoring was built around Python/JS supply-chain capability profiles.
+# On C/C++/Go/Rust/Java code it tends to fire spuriously because the regex-based
+# fingerprint matches bare words like "socket" in comments and the capability
+# vocabulary doesn't describe those languages well.
+_ELIGIBLE_EXTENSIONS = {".py", ".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx"}
+
+
+def _is_eligible_for_anomaly(path: str) -> bool:
+    suffix = Path(path).suffix.lower()
+    return suffix in _ELIGIBLE_EXTENSIONS
+
+
 def compute_anomaly_scores(
     files: list[RepoFileRecord],
     min_peers: int = 3,
@@ -50,11 +62,19 @@ def compute_anomaly_scores(
     files). Files with capabilities outside the normal set are scored by how
     many anomalous capabilities they have.
 
+    Peer grouping includes every fingerprinted file (so single-script packages
+    still have config/doc peers to compare against), but only supply-chain-
+    relevant languages (Python/JS/TS) are *scored*. Non-eligible files
+    (C/C++/Rust/Go/Java/etc.) are excluded from scoring because their
+    regex-based fingerprints tend to match stray keywords in comments and
+    the capability vocabulary doesn't describe those languages well.
+
     :param files: All scanned file records (must have fingerprints in metadata).
     :param min_peers: Minimum files in a directory to run anomaly detection.
     :param threshold_pct: Fraction of files that must share a capability for it to be "normal".
     """
-    # Group by directory
+    # Group all fingerprinted files by directory (non-eligible files still
+    # contribute to peer count and normal-capability baseline).
     dir_groups: dict[str, list[RepoFileRecord]] = {}
     for f in files:
         fp_dict = f.metadata.get("fingerprint")
@@ -87,9 +107,14 @@ def compute_anomaly_scores(
         min_count = max(2, int(len(group) * threshold_pct))
         normal_caps = {cap for cap, count in cap_counts.items() if count >= min_count}
 
-        # Score each file
+        # Score each file — but only emit results for eligible-language files.
+        # Non-eligible files (C/C++/Rust/Go/etc.) still participated in the
+        # normal-capability baseline above so eligible files are compared
+        # against a correct peer profile.
         for f, caps in cap_sets:
             if not caps:
+                continue
+            if not _is_eligible_for_anomaly(f.path):
                 continue
             anomalous = caps - normal_caps
             if anomalous:

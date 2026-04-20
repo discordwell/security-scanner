@@ -114,3 +114,38 @@ def test_files_without_fingerprint_skipped():
     ]
     results = compute_anomaly_scores(files)
     assert len(results) == 0  # not enough peers with fingerprints
+
+
+def test_non_python_files_excluded_from_anomaly_scoring():
+    """C++/Rust/Go/Java files use a different capability vocabulary; the anomaly
+    scorer is tuned for Python/JS supply-chain patterns and must skip them.
+    This prevents FPs on heterogeneous repos (e.g. a Python project vendoring
+    a C++ benchmark suite).
+    """
+    files = [
+        _file("src/bench/a.cpp", ["file_io"]),
+        _file("src/bench/b.cpp", ["file_io"]),
+        _file("src/bench/c.cpp", ["file_io"]),
+        _file("src/bench/outlier.cpp", ["imports_network", "atexit", "network_calls"]),
+    ]
+    results = compute_anomaly_scores(files)
+    assert results == {}
+
+
+def test_mixed_language_directory_only_scores_eligible():
+    """In a mixed directory, score the Python files and skip the C++ files.
+    Anomaly detection stays useful for the supply-chain-relevant subset."""
+    files = [
+        _file("mixed/a.py", ["file_io"]),
+        _file("mixed/b.py", ["file_io"]),
+        _file("mixed/c.py", ["file_io"]),
+        _file("mixed/outlier.py", ["imports_network", "atexit", "network_calls"]),
+        # C++ peers that would otherwise dilute the "normal" set or get scored
+        _file("mixed/vendor1.cpp", ["imports_network"]),
+        _file("mixed/vendor2.cpp", ["imports_network"]),
+    ]
+    results = compute_anomaly_scores(files)
+    # Python outlier still detected...
+    assert "mixed/outlier.py" in results
+    # ...and no C++ file is scored.
+    assert not any(p.endswith(".cpp") for p in results)

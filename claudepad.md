@@ -2,6 +2,25 @@
 
 ## Session Summaries
 
+### 2026-04-20T00:00:00Z
+- Comprehensive project audit (4 parallel agents: code quality, scanner security, detection, ops/DX)
+- Detection pass implementation (item 2 from audit recommendations)
+  - Extended `obfuscation:import_exec_chain` to catch `importlib.import_module` as __import__-equivalent (ForceMemo variants)
+  - New `behavioral:git_exfiltration` HIGH detector (subprocess git commit/push + credential-path reads)
+  - New `behavioral:migration_credential_theft` HIGH detector (Django `migrations.RunPython` + credential reads)
+  - Hex-escape FP fix: demoted to INFO when alone; MEDIUM only with co-occurring obfuscation signals
+  - Compound MEDIUM→MALICIOUS fusion rule: 3+ MEDIUMs across 3+ distinct attack-vector prefixes (excluding `unresolved`/`ast`/`coverage_gap`/`llm`). Applied in both `pipeline/fusion.py` and `repo_scanner._aggregate_verdict`
+  - Anomaly scoring language gate: scores only `.py/.js/.ts/.jsx/.tsx` files (non-eligible files still counted as peers/baseline so single-script packages still work)
+- **Eval: 15/25 → 21/25 (60% → 84%)**, zero regressions in the 429-test unit suite
+  - Fixed: pkg_crypto_util (FP), pkg_devtools_sync (git exfil), pkg_django_cache (ForceMemo), pkg_django_profiles (RunPython), pkg_env_validator (compound MED), pkg_string_helpers (compound MED)
+  - Still failing: pkg_config_manager (3-file payload split), pkg_dataprocessor (setup.py cmdclass), pkg_ssh_lite (SSH handshake piggyback), repo_lightgbm_metal_pr_clean (string-split FP on Eigen)
+- 13 new tests (importlib, hex FP, git exfil, RunPython, compound MED fusion, anomaly gating)
+- Follow-ups from code review (tracked; not blocking):
+  - Git-exfil detector may FP on dotfile-sync tools that read `~/.gitconfig` and `git push`
+  - Compound MEDIUM 3+3 rule could over-escalate legit projects combining postinstall + base64 + bulk credential access
+  - Hex-escape MEDIUM/INFO decision is ordering-dependent (future detectors added before it would change severity)
+  - Compound-MEDIUM logic duplicated between fusion.py and repo_scanner.py
+
 ### 2026-04-05T19:00:00Z
 - Added EMBER + LightGBM ML classifier adapter for executable malware detection
   - New `EmberAdapter` in `src/security_scanner/adapters/ember.py`

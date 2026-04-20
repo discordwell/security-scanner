@@ -405,13 +405,30 @@ class RepoScanner:
         binary_verdicts: list[VerdictRecord],
     ) -> tuple[VerdictState, str]:
         has_critical = any(o.severity in (ObservationSeverity.HIGH, ObservationSeverity.CRITICAL) for o in observations)
-        has_medium = any(o.severity == ObservationSeverity.MEDIUM for o in observations)
+        mediums = [o for o in observations if o.severity == ObservationSeverity.MEDIUM]
         binary_malicious = any(v.state == VerdictState.MALICIOUS for v in binary_verdicts)
         binary_suspicious = any(v.state == VerdictState.SUSPICIOUS for v in binary_verdicts)
 
         if has_critical or binary_malicious:
             return VerdictState.MALICIOUS, "Repository contains high-confidence malicious indicators."
-        if has_medium or binary_suspicious:
+
+        # Compound MEDIUM: evasion-tuned attacks deliberately avoid any single HIGH
+        # signal. 3+ MEDIUMs spanning 3+ distinct attack-vector categories is a
+        # coordinated attack chain -- escalate to MALICIOUS.
+        # Excluded prefixes describe analytical uncertainty rather than attack steps.
+        _NON_ATTACK_PREFIXES = {"unresolved", "ast", "coverage_gap", "llm"}
+        distinct_vectors = {
+            o.category.split(":", 1)[0] for o in mediums
+        } - _NON_ATTACK_PREFIXES
+        if len(mediums) >= 3 and len(distinct_vectors) >= 3:
+            return (
+                VerdictState.MALICIOUS,
+                f"Coordinated attack chain: {len(mediums)} MEDIUM findings across "
+                f"{len(distinct_vectors)} distinct attack-vector categories "
+                f"({', '.join(sorted(distinct_vectors))}).",
+            )
+
+        if mediums or binary_suspicious:
             return VerdictState.SUSPICIOUS, "Repository contains indicators requiring analyst review."
         if observations:
             return VerdictState.INCONCLUSIVE, "Repository scanned but no strong signals found."

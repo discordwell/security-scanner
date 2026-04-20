@@ -188,3 +188,67 @@ def test_child_artifact_observations_included():
     child.sha256 = "child"
     verdict = FusionPipeline().verdict_for(root, [root, child])
     assert verdict.state == VerdictState.MALICIOUS
+
+
+# -- Compound MEDIUM escalation (evasion-tuned malware avoids any single HIGH) --
+
+def test_three_mediums_across_distinct_vectors_escalate_to_malicious():
+    """3+ MEDIUMs spanning 3+ distinct attack-vector categories = MALICIOUS."""
+    artifact = _make_artifact(
+        observations=[
+            _obs(ObservationSeverity.MEDIUM, category="obfuscation:base64"),
+            _obs(ObservationSeverity.MEDIUM, category="behavioral:bulk_credential_access"),
+            _obs(ObservationSeverity.MEDIUM, category="dependency:postinstall"),
+        ],
+        baseline_id="bl-1",
+        baseline_distance=0.0,
+    )
+    verdict = FusionPipeline().verdict_for(artifact, [artifact])
+    assert verdict.state == VerdictState.MALICIOUS
+    assert any("attack-vector" in r for r in verdict.reasons)
+
+
+def test_three_mediums_in_same_category_do_not_escalate():
+    """3 MEDIUMs all within `obfuscation:*` should stay SUSPICIOUS, not MALICIOUS."""
+    artifact = _make_artifact(
+        observations=[
+            _obs(ObservationSeverity.MEDIUM, category="obfuscation:base64"),
+            _obs(ObservationSeverity.MEDIUM, category="obfuscation:eval_exec"),
+            _obs(ObservationSeverity.MEDIUM, category="obfuscation:hex_escape"),
+        ],
+        baseline_id="bl-1",
+        baseline_distance=0.0,
+    )
+    verdict = FusionPipeline().verdict_for(artifact, [artifact])
+    assert verdict.state == VerdictState.SUSPICIOUS
+
+
+def test_uncertainty_prefix_does_not_count_as_attack_vector():
+    """unresolved:* MEDIUMs describe what we couldn't determine, not attack steps.
+    They must not pad out the distinct-vector count on their own."""
+    artifact = _make_artifact(
+        observations=[
+            _obs(ObservationSeverity.MEDIUM, category="unresolved:exec_of_unknown"),
+            _obs(ObservationSeverity.MEDIUM, category="unresolved:path_construction"),
+            _obs(ObservationSeverity.MEDIUM, category="obfuscation:base64"),
+        ],
+        baseline_id="bl-1",
+        baseline_distance=0.0,
+    )
+    verdict = FusionPipeline().verdict_for(artifact, [artifact])
+    # Only 1 attack vector (obfuscation) + 2 unresolved -> stays SUSPICIOUS
+    assert verdict.state == VerdictState.SUSPICIOUS
+
+
+def test_two_mediums_insufficient_for_escalation():
+    """2 MEDIUMs across 2 vectors are SUSPICIOUS, not MALICIOUS (need 3+)."""
+    artifact = _make_artifact(
+        observations=[
+            _obs(ObservationSeverity.MEDIUM, category="obfuscation:base64"),
+            _obs(ObservationSeverity.MEDIUM, category="behavioral:bulk_credential_access"),
+        ],
+        baseline_id="bl-1",
+        baseline_distance=0.0,
+    )
+    verdict = FusionPipeline().verdict_for(artifact, [artifact])
+    assert verdict.state == VerdictState.SUSPICIOUS

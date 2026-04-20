@@ -74,8 +74,11 @@ _CHAR_LIST_RE = re.compile(
 
 # Dynamic import + deobfuscation + exec patterns (Python malware staple)
 _DUNDER_IMPORT_RE = re.compile(r"__import__\s*\(\s*['\"](\w+)['\"]\s*\)")
+# ForceMemo-style malware uses importlib.import_module('base64') as a __import__ stand-in
+_IMPORTLIB_MODULE_RE = re.compile(r"importlib\.import_module\s*\(\s*['\"](\w+)['\"]\s*\)")
 _EXEC_COMPILE_RE = re.compile(r'exec\s*\(\s*compile\s*\(')
-_XOR_LAMBDA_RE = re.compile(r'lambda\s+\w+\s*,?\s*\w*\s*:\s*bytes\s*\(\s*\[\s*\w+\s*\^\s*\w+')
+# Accept inline lambdas and comprehension forms: bytes([b^k for b in data]) / bytes(b^k for b in ...)
+_XOR_LAMBDA_RE = re.compile(r'(?:lambda\s+\w+\s*,?\s*\w*\s*:\s*)?bytes\s*\(\s*[\[\(]\s*\w+\s*\^\s*\w+')
 _MARSHAL_LOADS_RE = re.compile(r'marshal\.loads\s*\(')
 _NESTED_DECODE_RE = re.compile(
     r'(zlib\.decompress|__import__\s*\(\s*[\'"]zlib[\'"]\s*\)\.decompress)\s*\('
@@ -143,7 +146,6 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
         indicators += 1
 
     for pattern, name, tag in [
-        (_HEX_ESCAPE_RE, "Hex-escaped byte sequence", "hex_escape"),
         (_EVAL_EXEC_RE, "eval()/exec() call", "eval_exec"),
         (_FROMCHARCODE_RE, "String.fromCharCode()", "fromcharcode"),
         (_ATOB_RE, "atob() call", "atob"),
@@ -160,6 +162,30 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
                 tags=["source", "obfuscation", tag],
             ))
             indicators += 1
+
+    # Hex-escaped byte sequences are ambiguous: raw-byte constants (IVs, salts, test vectors)
+    # are common in crypto code, while shellcode-in-strings is classic malware. Emit MEDIUM
+    # only when co-occurring with other obfuscation signals (indicators > 0); otherwise
+    # demote to INFO so legitimate crypto constants don't trip the verdict.
+    hex_escape_matches = _HEX_ESCAPE_RE.findall(content)
+    if hex_escape_matches:
+        if indicators > 0:
+            obs.append(Observation(
+                source="source-heuristic", category="obfuscation:hex_escape",
+                severity=ObservationSeverity.MEDIUM,
+                message=f"Hex-escaped byte sequence found in {path} ({len(hex_escape_matches)} occurrence(s)) alongside other obfuscation signals.",
+                evidence={"path": path, "count": len(hex_escape_matches)},
+                tags=["source", "obfuscation", "hex_escape"],
+            ))
+            indicators += 1
+        else:
+            obs.append(Observation(
+                source="source-heuristic", category="obfuscation:hex_escape",
+                severity=ObservationSeverity.INFO,
+                message=f"Hex-escaped byte sequence in {path} ({len(hex_escape_matches)} occurrence(s)) -- likely raw-byte constant (IV/salt/test vector).",
+                evidence={"path": path, "count": len(hex_escape_matches), "demoted": True},
+                tags=["source", "obfuscation", "hex_escape", "likely_constant"],
+            ))
 
     # --- Invisible Unicode payload (GlassWorm) ---
     vs_count = len(_UNICODE_VARIATION_SELECTOR_RE.findall(content))
@@ -194,9 +220,12 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
         ))
         indicators += 1
 
-    # --- Dynamic __import__ deobfuscation chain (Python malware staple) ---
+    # --- Dynamic __import__ / importlib deobfuscation chain (Python malware staple) ---
     dunder_imports = _DUNDER_IMPORT_RE.findall(content)
-    suspicious_dimports = [m for m in dunder_imports if m in _SUSPICIOUS_DUNDER_MODULES]
+    importlib_imports = _IMPORTLIB_MODULE_RE.findall(content)
+    # Treat __import__('base64') and importlib.import_module('base64') as equivalent.
+    all_dynamic_imports = sorted(set(dunder_imports) | set(importlib_imports))
+    suspicious_dimports = [m for m in all_dynamic_imports if m in _SUSPICIOUS_DUNDER_MODULES]
     has_exec_compile = bool(_EXEC_COMPILE_RE.search(content))
     has_xor_lambda = bool(_XOR_LAMBDA_RE.search(content))
     has_marshal = bool(_MARSHAL_LOADS_RE.search(content))
@@ -204,11 +233,12 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
     has_codecs_rot = bool(_CODECS_DECODE_RE.search(content))
 
     if suspicious_dimports:
+        mechanism = "importlib.import_module" if importlib_imports else "__import__"
         obs.append(Observation(
             source="source-heuristic", category="obfuscation:dynamic_import",
             severity=ObservationSeverity.MEDIUM,
-            message=f"Dynamic __import__() of encoding modules in {path}: {', '.join(suspicious_dimports)}.",
-            evidence={"path": path, "modules": suspicious_dimports},
+            message=f"Dynamic {mechanism}() of encoding modules in {path}: {', '.join(suspicious_dimports)}.",
+            evidence={"path": path, "modules": suspicious_dimports, "mechanism": mechanism},
             tags=["source", "obfuscation", "dynamic_import"],
         ))
         indicators += 1
@@ -243,13 +273,14 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
         ))
         indicators += 1
 
-    # --- Compound HIGH: __import__ + decode chain + exec (zero legitimate use) ---
+    # --- Compound HIGH: dynamic import + decode chain + exec (zero legitimate use) ---
     if suspicious_dimports and (has_exec_compile or _EVAL_EXEC_RE.search(content)):
+        mechanism = "importlib.import_module" if importlib_imports else "__import__"
         obs.append(Observation(
             source="source-heuristic", category="obfuscation:import_exec_chain",
             severity=ObservationSeverity.HIGH,
-            message=f"Dynamic __import__() of {', '.join(suspicious_dimports)} combined with exec/eval/compile in {path} -- this is a malware deobfuscation-and-execute chain with no legitimate use case.",
-            evidence={"path": path, "modules": suspicious_dimports, "has_exec_compile": has_exec_compile, "has_xor": has_xor_lambda},
+            message=f"Dynamic {mechanism}() of {', '.join(suspicious_dimports)} combined with exec/eval/compile in {path} -- malware deobfuscation-and-execute chain with no legitimate use case.",
+            evidence={"path": path, "modules": suspicious_dimports, "mechanism": mechanism, "has_exec_compile": has_exec_compile, "has_xor": has_xor_lambda},
             tags=["source", "obfuscation", "import_exec_chain", "malware_pattern"],
         ))
 
@@ -651,6 +682,17 @@ _EXFIL_POLYGLOT_RE = re.compile(
     r')',
 )
 
+# Git-based exfiltration: commit+push is a cheap, untakeable out-of-band C2 channel.
+# Match subprocess (Python) or child_process (Node) invoking git with commit/push/add.
+_GIT_SUBPROCESS_PY_RE = re.compile(
+    r'(?:subprocess\.(?:run|Popen|call|check_output|check_call)|os\.system)\s*\([^)]{0,200}?["\']git["\']',
+    re.DOTALL,
+)
+_GIT_SUBPROCESS_JS_RE = re.compile(
+    r'(?:execSync|exec|spawn|spawnSync)\s*\(\s*["\'](?:git\b|[^"\']{0,40}?\bgit\s)',
+)
+_GIT_WRITE_OP_RE = re.compile(r'["\'](commit|push|add|remote)["\']')
+
 # Polyglot string construction obfuscation
 # Obj-C: @[@".", @"s", @"s", @"h"] componentsJoinedByString:
 _OBJC_STRING_ARRAY_RE = re.compile(r'@\[\s*(?:@"[^"]{0,3}"\s*,\s*){5,}')
@@ -717,6 +759,36 @@ def detect_behavioral_patterns(content: str, path: str) -> list[Observation]:
             message=f"Raw DNS packet construction in {path}: struct.pack + SOCK_DGRAM + sendto. Characteristic of DNS tunneling/exfiltration.",
             evidence={"path": path, "pattern": "struct_pack_udp_sendto"},
             tags=["source", "behavioral", "dns_exfil", "network"],
+        ))
+
+    # Git-based exfiltration: subprocess spawns git + write op (commit/push/add) in a file
+    # that also reads sensitive paths. Legitimate dev tools may run `git status` but almost
+    # never `git push` to a baked-in URL alongside credential reads.
+    has_git_call = bool(_GIT_SUBPROCESS_PY_RE.search(content) or _GIT_SUBPROCESS_JS_RE.search(content))
+    if has_git_call and all_sensitive:
+        git_ops = set(_GIT_WRITE_OP_RE.findall(content))
+        write_ops = git_ops & {"commit", "push", "add"}
+        if write_ops:
+            obs.append(Observation(
+                source="source-heuristic",
+                category="behavioral:git_exfiltration",
+                severity=ObservationSeverity.HIGH,
+                message=f"Git-based exfiltration in {path}: spawns `git {'/'.join(sorted(write_ops))}` in a file that reads credential paths. Out-of-band C2 via git push.",
+                evidence={"path": path, "git_ops": sorted(write_ops), "sensitive_count": len(all_sensitive)},
+                tags=["source", "behavioral", "git_exfil", "credential_theft"],
+            ))
+
+    # Django migration RunPython: schema migrations should mutate the DB, never read
+    # credential paths. RunPython with sensitive file access is a supply-chain attack
+    # (credentials exfil through the DB column, which backups/replicas then carry).
+    if "migrations.RunPython" in content and all_sensitive:
+        obs.append(Observation(
+            source="source-heuristic",
+            category="behavioral:migration_credential_theft",
+            severity=ObservationSeverity.HIGH,
+            message=f"Django migration RunPython in {path} reads credential paths. Schema migrations should not perform file I/O on user credentials -- this is an out-of-band exfil channel via the DB.",
+            evidence={"path": path, "sensitive_count": len(all_sensitive)},
+            tags=["source", "behavioral", "credential_theft", "django_migration"],
         ))
 
     return obs
