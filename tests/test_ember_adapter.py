@@ -101,7 +101,7 @@ def test_custom_thresholds():
 
 def test_ember_ml_path_high_score():
     """When ember+lightgbm are available and model loaded, ML path runs."""
-    import numpy as np
+    np = pytest.importorskip("numpy")
 
     mock_model = MagicMock()
     mock_model.predict.return_value = np.array([0.92])
@@ -128,7 +128,7 @@ def test_ember_ml_path_high_score():
 
 def test_ember_ml_path_benign_score():
     """Benign score (below low threshold) produces no observations."""
-    import numpy as np
+    np = pytest.importorskip("numpy")
 
     mock_model = MagicMock()
     mock_model.predict.return_value = np.array([0.05])
@@ -168,7 +168,7 @@ def test_ember_ml_path_feature_extraction_failure():
 
 def test_ember_unsupported_format_with_model():
     """Non-PE format with model loaded returns PASS with no observations."""
-    import numpy as np
+    np = pytest.importorskip("numpy")
 
     mock_model = MagicMock()
     mock_extractor = MagicMock()
@@ -199,7 +199,7 @@ def test_ember_unknown_format_uses_heuristic():
 
 def test_ember_observations_have_correct_tags():
     """EMBER observations should have expected tags."""
-    import numpy as np
+    np = pytest.importorskip("numpy")
 
     mock_model = MagicMock()
     mock_model.predict.return_value = np.array([0.75])
