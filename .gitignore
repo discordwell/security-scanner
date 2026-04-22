@@ -13,3 +13,10 @@ data/models/
 data/yara_rules/auto/
 eval/samples/
 eval/results_binary.json
+eval/cases/
+eval/injections/
+eval/create_poisoned_repos.sh
+eval/prepare_lightgbm_pr_trial.sh
+eval/prepare_naive_review_env.sh
+eval/prepare_naive_review_git_env.sh
+eval/results_anti_claude.md
