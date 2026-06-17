@@ -2,6 +2,23 @@
 
 ## Session Summaries
 
+### 2026-06-17T00:00:00Z
+- **Fixed MALICIOUS false-positive on clean compiled-language repos** (eval/exec detector)
+  - Root cause: `_EVAL_EXEC_RE = \b(eval|exec)\(` matched method calls/declarations, not just builtins.
+    Eigen's `matrix.eval()` / `ReturnType eval() const` (vendored C++) produced 5+ obfuscation MEDIUMs
+    that stacked into a MALICIOUS verdict via the compound-attack-chain rule.
+  - Fix 1: negative lookbehind `(?<![\w.>:])` rejects member/scope calls (`.eval()`, `->exec()`, `::eval()`)
+  - Fix 2: language gate `_eval_exec_is_builtin(path)` skips compiled-lang extensions (C/C++/Rust/Go/Java/...);
+    `has_eval_exec` computed once and reused by the CRITICAL/HIGH escalation checks
+  - **repo_lightgbm_metal_pr_clean: MALICIOUS → SUSPICIOUS**; bare `eval(payload)` in .py/.js/.php/.rb/.sh still fires
+  - 4 new regression tests
+- **Refactor: extracted shared compound-attack-chain rule into `verdict_rules.py`** (tracked follow-up)
+  - The "3+ MEDIUM across 3+ attack vectors → MALICIOUS" logic + `_NON_ATTACK_PREFIXES` set was duplicated
+    in `pipeline/fusion.py` and `repo_scanner.py`; now single-sourced (`attack_vector_categories`,
+    `is_compound_attack_chain`, constants). Behavior identical; 7 new unit tests.
+- 453 tests passing (was 442), 0 regressions. Eval unchanged: FP=0, same 3 pre-existing FNs.
+- Left `research/` untracked (deliberate: public repo, dual-use exfil notes the operator kept local since April).
+
 ### 2026-04-20T00:00:00Z
 - Comprehensive project audit (4 parallel agents: code quality, scanner security, detection, ops/DX)
 - Detection pass implementation (item 2 from audit recommendations)
