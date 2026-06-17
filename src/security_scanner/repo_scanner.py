@@ -19,6 +19,7 @@ from .models import (
 from .reference_graph import build_reference_graph, graph_to_observations
 from .service import AnalysisService
 from .source_analysis import analyze_source
+from .verdict_rules import attack_vector_categories, is_compound_attack_chain
 
 logger = logging.getLogger(__name__)
 
@@ -414,13 +415,10 @@ class RepoScanner:
 
         # Compound MEDIUM: evasion-tuned attacks deliberately avoid any single HIGH
         # signal. 3+ MEDIUMs spanning 3+ distinct attack-vector categories is a
-        # coordinated attack chain -- escalate to MALICIOUS.
-        # Excluded prefixes describe analytical uncertainty rather than attack steps.
-        _NON_ATTACK_PREFIXES = {"unresolved", "ast", "coverage_gap", "llm"}
-        distinct_vectors = {
-            o.category.split(":", 1)[0] for o in mediums
-        } - _NON_ATTACK_PREFIXES
-        if len(mediums) >= 3 and len(distinct_vectors) >= 3:
+        # coordinated attack chain -- escalate to MALICIOUS (shared rule, see
+        # verdict_rules so this stays in lock-step with the binary fusion pipeline).
+        if is_compound_attack_chain(mediums):
+            distinct_vectors = attack_vector_categories(mediums)
             return (
                 VerdictState.MALICIOUS,
                 f"Coordinated attack chain: {len(mediums)} MEDIUM findings across "

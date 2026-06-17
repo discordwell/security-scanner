@@ -14,6 +14,7 @@ from ..models import (
     VerdictRecord,
     VerdictState,
 )
+from ..verdict_rules import attack_vector_categories, is_compound_attack_chain
 
 logger = logging.getLogger(__name__)
 
@@ -237,17 +238,14 @@ class FusionPipeline:
         pending_actions: list[str] = []
         state = VerdictState.INCONCLUSIVE
 
-        # Attack-vector category prefix (everything before the first `:`), excluding
-        # purely-analytical prefixes that represent uncertainty rather than attack steps.
-        _NON_ATTACK_PREFIXES = {"unresolved", "ast", "coverage_gap", "llm"}
-        distinct_attack_vectors = {
-            obs.category.split(":", 1)[0] for obs in medium
-        } - _NON_ATTACK_PREFIXES
+        # Distinct attack-vector categories among MEDIUM findings (shared rule, see
+        # verdict_rules) -- used both to gate escalation and to explain it.
+        distinct_attack_vectors = attack_vector_categories(medium)
 
         if critical_or_high:
             state = VerdictState.MALICIOUS
             reasons.append("High-confidence static evidence indicates malicious behavior or tooling.")
-        elif len(medium) >= 3 and len(distinct_attack_vectors) >= 3:
+        elif is_compound_attack_chain(medium):
             # Evasion-tuned malware deliberately avoids any single HIGH signal.
             # 3+ MEDIUMs spanning 3+ distinct attack vectors is a coherent attack chain.
             state = VerdictState.MALICIOUS
