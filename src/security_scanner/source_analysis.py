@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os.path
 import re
 from difflib import SequenceMatcher
 
@@ -53,7 +54,34 @@ def _is_cloud_metadata_ip(url: str) -> bool:
 _BASE64_RE = re.compile(r'[A-Za-z0-9+/]{40,}={0,2}')
 _HEX_ESCAPE_RE = re.compile(r'(?:\\x[0-9a-fA-F]{2}){8,}')
 _HEX_LONG_RE = re.compile(r'0x[0-9a-fA-F]{16,}')
-_EVAL_EXEC_RE = re.compile(r'\b(eval|exec)\s*\(')
+# Match the bare eval()/exec() builtins (Python/JS) -- NOT method or scope calls
+# like Eigen's `matrix.eval()`, JS `regex.exec()`, Java `Runtime.exec()`, or C++
+# `Foo::eval()`. The negative lookbehind rejects a preceding identifier char, `.`,
+# the `>` of `->`, or the `:` of `::`. A plain `\b(eval|exec)\(` matched every
+# `.eval()` in vendored C++/JS, producing MALICIOUS false positives on clean repos.
+_EVAL_EXEC_RE = re.compile(r'(?<![\w.>:])(?:eval|exec)\s*\(')
+
+# `eval`/`exec` are dangerous dynamic-execution builtins only in interpreted
+# languages (Python, JS/TS, PHP, Ruby, shell, ...). In compiled languages they are
+# ordinary identifiers -- method declarations (`ReturnType eval() const`), comment
+# prose, etc. -- which the regex above cannot tell apart from a real builtin call.
+# Skip the eval/exec obfuscation signal for source whose extension marks it compiled,
+# so vendored math/template libraries (Eigen, Boost) don't read as obfuscation.
+_COMPILED_LANG_EXTS = frozenset({
+    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx", ".hh", ".ipp", ".inl", ".tcc",
+    ".m", ".mm",                          # Objective-C / Objective-C++
+    ".java", ".kt", ".kts", ".scala", ".groovy",  # JVM family
+    ".go", ".rs", ".cs", ".swift",        # Go / Rust / C# / Swift
+    ".cu", ".cuh", ".metal",              # GPU dialects of C/C++
+    ".zig", ".nim", ".v",                 # newer systems languages
+})
+
+
+def _eval_exec_is_builtin(path: str) -> bool:
+    """True when bare eval()/exec() in this file would be a dynamic-execution builtin."""
+    return os.path.splitext(path.lower())[1] not in _COMPILED_LANG_EXTS
+
+
 _FROMCHARCODE_RE = re.compile(r'String\.fromCharCode\s*\(')
 _ATOB_RE = re.compile(r'\batob\s*\(')
 _JS_OBFUSC_VAR_RE = re.compile(r'\b_0x[0-9a-f]{4,}\b')
@@ -145,8 +173,21 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
         ))
         indicators += 1
 
+    # eval()/exec() builtin -- only meaningful in interpreted languages. Computed once
+    # and reused by the escalation checks below so the language gate stays consistent.
+    eval_exec_matches = _EVAL_EXEC_RE.findall(content) if _eval_exec_is_builtin(path) else []
+    has_eval_exec = bool(eval_exec_matches)
+    if has_eval_exec:
+        obs.append(Observation(
+            source="source-heuristic", category="obfuscation:eval_exec",
+            severity=ObservationSeverity.MEDIUM,
+            message=f"eval()/exec() call found in {path} ({len(eval_exec_matches)} occurrence(s)).",
+            evidence={"path": path, "count": len(eval_exec_matches)},
+            tags=["source", "obfuscation", "eval_exec"],
+        ))
+        indicators += 1
+
     for pattern, name, tag in [
-        (_EVAL_EXEC_RE, "eval()/exec() call", "eval_exec"),
         (_FROMCHARCODE_RE, "String.fromCharCode()", "fromcharcode"),
         (_ATOB_RE, "atob() call", "atob"),
         (_JS_OBFUSC_VAR_RE, "JS obfuscation variable naming (_0x...)", "js_obfusc"),
@@ -195,7 +236,7 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
 
     if invisible_chars > 50:
         severity = ObservationSeverity.HIGH
-        if has_codepoint_decoder or _EVAL_EXEC_RE.search(content):
+        if has_codepoint_decoder or has_eval_exec:
             severity = ObservationSeverity.CRITICAL
         # JSON/data files may legitimately contain Unicode test data (e.g. normalization tests)
         if _is_data_file(path) and not has_codepoint_decoder:
@@ -274,7 +315,7 @@ def detect_obfuscation(content: str, path: str) -> list[Observation]:
         indicators += 1
 
     # --- Compound HIGH: dynamic import + decode chain + exec (zero legitimate use) ---
-    if suspicious_dimports and (has_exec_compile or _EVAL_EXEC_RE.search(content)):
+    if suspicious_dimports and (has_exec_compile or has_eval_exec):
         mechanism = "importlib.import_module" if importlib_imports else "__import__"
         obs.append(Observation(
             source="source-heuristic", category="obfuscation:import_exec_chain",

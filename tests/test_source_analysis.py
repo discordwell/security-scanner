@@ -22,6 +22,60 @@ def test_detect_eval_exec():
     assert "obfuscation:eval_exec" in categories
 
 
+def test_eval_exec_method_calls_not_flagged():
+    """Member/scope calls named eval/exec are not the dangerous builtins.
+
+    Even in a dynamic-language file, `df.eval()` (pandas), `regex.exec()` (JS),
+    `Foo::eval()` and `ptr->exec()` (bound C extensions) are method/scope access,
+    not the bare builtin. The negative lookbehind must reject them.
+    """
+    content = (
+        "r = (a + b).eval()\n"
+        "m = regex.exec(input)\n"
+        "Foo::eval()\n"
+        "ptr->exec()\n"
+        "out = df.eval('a + b')\n"
+    )
+    obs = detect_obfuscation(content, "analysis.py")
+    categories = [o.category for o in obs]
+    assert "obfuscation:eval_exec" not in categories
+
+
+def test_eval_exec_builtin_still_flagged_among_method_calls():
+    """A real bare eval() must still fire even next to benign method calls."""
+    content = "r = expr.eval()\nresult = eval(user_payload)\n"
+    obs = detect_obfuscation(content, "loader.py")
+    categories = [o.category for o in obs]
+    assert "obfuscation:eval_exec" in categories
+
+
+def test_eval_exec_not_flagged_in_compiled_languages():
+    """In compiled languages `eval`/`exec` are ordinary identifiers, not builtins.
+
+    Eigen-style C++ headers declare methods `ReturnType eval() const` and mention
+    `eval()` in comments; these previously produced obfuscation MEDIUMs that stacked
+    into a MALICIOUS false positive on clean vendored libraries.
+    """
+    cpp = (
+        "// the return type of eval() is computed lazily\n"
+        "PlainObject eval() const { return derived(); }\n"
+        "template <typename T> Index exec(const T& x);\n"
+    )
+    for ext in ("Core/DenseBase.h", "matrix.cpp", "kernel.cu", "lib.rs", "main.go", "App.java"):
+        obs = detect_obfuscation(cpp, ext)
+        categories = [o.category for o in obs]
+        assert "obfuscation:eval_exec" not in categories, ext
+
+
+def test_eval_exec_flagged_in_interpreted_languages():
+    """The language gate must not suppress real eval/exec in interpreted source."""
+    payload = "out = eval(blob)\n"
+    for ext in ("a.py", "b.js", "c.ts", "d.php", "e.rb", "hook.sh"):
+        obs = detect_obfuscation(payload, ext)
+        categories = [o.category for o in obs]
+        assert "obfuscation:eval_exec" in categories, ext
+
+
 def test_detect_base64_blob():
     import base64
     payload = base64.b64encode(b"This is a hidden payload that should be detected").decode()
