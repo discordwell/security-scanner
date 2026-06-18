@@ -313,7 +313,17 @@ def _parse_references(
 
     if lower.endswith(".py"):
         for match in _PY_IMPORT_RE.finditer(content):
-            module = match.group(1) or match.group(2)
+            from_part, imported = match.group(1), match.group(2)
+            # `from . import helper` / `from .. import helper`: the `from` part is
+            # only dots, so the referenced sibling module is the imported name.
+            # Preserve the dot prefix so _resolve_path walks up the right number of
+            # levels (e.g. "." + "helper" -> ".helper"). Without this, module would
+            # be "." which resolves to nothing and the edge is silently dropped --
+            # missing a very common relative-import idiom in split-payload packages.
+            if from_part and from_part.strip(".") == "":
+                module = from_part + imported
+            else:
+                module = from_part or imported
             refs.append(FileReference(source_path, module, "import", context=match.group(0).strip()))
         for match in _PY_OPEN_RE.finditer(content):
             refs.append(FileReference(source_path, match.group(1), "open", context=match.group(0).strip()))

@@ -80,6 +80,36 @@ def test_python_import_detection(tmp_path):
     assert "data.py" in targets
 
 
+def test_python_relative_import_detection(tmp_path):
+    """`from . import X` must resolve to the sibling module, not be dropped.
+
+    Regression: the parser picked the `from` part ("." for a bare relative
+    import) as the target, which resolves to nothing, so the edge was silently
+    discarded -- missing a very common idiom used by split-payload packages.
+    """
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("from . import loader\n")
+    (pkg / "loader.py").write_text("PAYLOAD = 'x'\n")
+    files = [_file("pkg/__init__.py"), _file("pkg/loader.py")]
+    graph = build_reference_graph(files, tmp_path)
+    targets = [r.target_path for r in graph.references]
+    assert "pkg/loader.py" in targets
+
+
+def test_python_relative_import_parent_package(tmp_path):
+    """`from .. import X` resolves up one package level to the sibling module."""
+    pkg = tmp_path / "pkg"
+    sub = pkg / "sub"
+    sub.mkdir(parents=True)
+    (pkg / "shared.py").write_text("HELPER = 1\n")
+    (sub / "mod.py").write_text("from .. import shared\n")
+    files = [_file("pkg/shared.py"), _file("pkg/sub/mod.py")]
+    graph = build_reference_graph(files, tmp_path)
+    targets = [r.target_path for r in graph.references]
+    assert "pkg/shared.py" in targets
+
+
 def test_python_open_detection(tmp_path):
     (tmp_path / "loader.py").write_text("data = open('config.json').read()\n")
     (tmp_path / "config.json").write_text("{}")

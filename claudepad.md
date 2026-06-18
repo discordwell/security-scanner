@@ -2,6 +2,35 @@
 
 ## Session Summaries
 
+### 2026-06-18T00:00:00Z
+- **Closed setup.py install-hook detection gap (pkg_dataprocessor: SUSPICIOUS → MALICIOUS)**
+  - Root cause: a `setup.py` that steals credentials + exfiltrates only produced a single MEDIUM
+    (`behavioral:credential_access_exfil`) → SUSPICIOUS. But setup.py runs on `pip install` before any
+    user code, so install-time credential theft is the canonical PyPI supply-chain attack and is MALICIOUS.
+  - Fix 1: `detect_behavioral_patterns` now elevates credential+exfil to **HIGH**
+    `behavioral:install_hook_credential_exfil` when the file is an install script (`setup.py`). Same
+    pattern in an ordinary module stays MEDIUM (only runs if the victim calls it).
+  - Fix 2: new `detect_install_hooks` detector flags setup.py **droppers** → HIGH `supply_chain:install_dropper`:
+    `curl|wget ... | sh/bash/python/node/...` (curl-pipe-interpreter) OR remote-fetch
+    (urlopen/urlretrieve/requests|httpx .get/.post) + in-process `exec`/`eval`.
+  - FP guards (from code review): the fetch-pairing is limited to in-process exec/eval — a benign
+    `urlretrieve(...) ; os.system('tar xzf ...')` (download-then-unpack) and list-form
+    `subprocess.check_call(['cmake',...])` (native build) do NOT fire. `compile()` excluded (builds a
+    code object, isn't execution). Verified FP=0 on clean cases (pkg_makefile_app, pkg_flask_hello, etc.).
+  - Removed dead `dependency:custom_install` branch (it lived in `detect_dependency_risks`, only called for
+    CONFIG files, but setup.py is SOURCE → never reached; bare-cmdclass MEDIUM would also over-flag legit
+    native-build packages). Behavior-based detectors replace it.
+- **Fixed `from . import X` / `from .. import X` reference-graph bug** (cross-file split-payload analysis)
+  - `_parse_references` picked the `from` part ("." for a bare relative import) as the edge target, which
+    resolves to nothing → the edge was silently dropped. Now preserves the dot prefix (`.` + `helper` →
+    `.helper`) so `_resolve_path` walks up the right level and resolves the sibling module. Common idiom;
+    previously invisible to the split-payload graph.
+- Eval (heuristic-only): **14/17 → 15/17 (79% → 86%)**, FP=0. Remaining 2 FNs are the genuinely-hard
+  cross-file (pkg_config_manager, absolute import) and SSH-handshake-piggyback (pkg_ssh_lite) cases.
+- 463 tests passing (was 453), 11 skipped, 0 regressions. +10 new tests. Left `research/` untracked
+  (deliberate, per prior sessions). Did not touch dormant `anomaly_score_threshold` config (ambiguous
+  HIGH-cutoff vs min-report semantics; the only test documents 0.7 — wiring it risks severity regressions).
+
 ### 2026-06-17T00:00:00Z
 - **Fixed MALICIOUS false-positive on clean compiled-language repos** (eval/exec detector)
   - Root cause: `_EVAL_EXEC_RE = \b(eval|exec)\(` matched method calls/declarations, not just builtins.

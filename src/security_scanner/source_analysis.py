@@ -616,16 +616,6 @@ def detect_dependency_risks(content: str, path: str) -> list[Observation]:
                         tags=["source", "dependency", "typosquat"],
                     ))
 
-    elif lower_path.endswith("setup.py"):
-        if "cmdclass" in content:
-            obs.append(Observation(
-                source="source-heuristic", category="dependency:custom_install",
-                severity=ObservationSeverity.MEDIUM,
-                message=f"Custom install command (cmdclass) in {path}.",
-                evidence={"path": path},
-                tags=["source", "dependency", "custom_install"],
-            ))
-
     return obs
 
 
@@ -744,6 +734,88 @@ _CPP_STRING_CONCAT_RE = re.compile(
 )
 
 
+# --- Install-time execution context ---
+#
+# setup.py is executed automatically during `pip install` (the build and install
+# phases run it directly), *before* any user code ever imports the package. So
+# malicious behavior located here -- credential theft, network exfil, or fetching
+# and running remote code -- is the canonical PyPI supply-chain attack: it triggers
+# on install alone, with no user action. The same patterns in an ordinary module
+# only run if the victim calls the malicious function, so they rate lower.
+_INSTALL_SCRIPT_NAMES = frozenset({"setup.py"})
+
+# curl/wget whose output is piped straight into a shell *or interpreter* --
+# unambiguous remote code execution (`curl http://x/i.sh | sh`,
+# `wget -qO- ... | sudo bash`, `curl ... | python`).
+_CURL_PIPE_SHELL_RE = re.compile(
+    r'\b(?:curl|wget)\b[^\n|]{0,300}\|\s*(?:sudo\s+)?'
+    r'(?:(?:ba|z|da|a)?sh|python3?|node|perl|ruby|php)\b',
+)
+# Fetch remote content into the process (GET or POST).
+_REMOTE_FETCH_RE = re.compile(
+    r'\b(?:urlopen|urlretrieve|urllib\.request|(?:requests|httpx)\.(?:get|post))\b',
+)
+# Execute fetched content *as code in-process*. Deliberately limited to exec()/eval():
+# a setup.py that downloads an artifact and then shells out to unpack it
+# (`os.system('tar xzf ...')`) or drives a compiler (`subprocess.check_call([...])`)
+# is a common *benign* pattern, so pairing a fetch with any shell/subprocess call
+# would false-positive. Shell-based droppers are caught by the curl|shell pattern
+# above instead. `compile()` is excluded because it only builds a code object -- it is
+# not execution until exec/eval runs the result.
+_INSTALL_CODE_EXEC_RE = re.compile(
+    r'(?<![\w.])(?:exec|eval)\s*\(',
+)
+
+
+def _is_install_script(path: str) -> bool:
+    """True when code in this file runs automatically at package install time."""
+    base = os.path.basename(path.lower().replace("\\", "/"))
+    return base in _INSTALL_SCRIPT_NAMES
+
+
+def detect_install_hooks(content: str, path: str) -> list[Observation]:
+    """Detect install-time supply-chain droppers in Python packaging scripts.
+
+    A ``setup.py`` that downloads remote content and executes it (or pipes a
+    downloaded script into a shell) is a dropper that runs on ``pip install``
+    before any user code -- the Python equivalent of an npm ``preinstall`` hook
+    fetching a payload. Credential-exfil install hooks are handled separately by
+    :func:`detect_behavioral_patterns` (install context elevates them to HIGH).
+    """
+    obs: list[Observation] = []
+    if not _is_install_script(path):
+        return obs
+
+    curl_pipe = bool(_CURL_PIPE_SHELL_RE.search(content))
+    remote_fetch = bool(_REMOTE_FETCH_RE.search(content))
+    executes_code = bool(_INSTALL_CODE_EXEC_RE.search(content))
+
+    if curl_pipe or (remote_fetch and executes_code):
+        how = (
+            "pipes a downloaded script straight to a shell"
+            if curl_pipe
+            else "fetches remote content and executes it in-process"
+        )
+        obs.append(Observation(
+            source="source-heuristic",
+            category="supply_chain:install_dropper",
+            severity=ObservationSeverity.HIGH,
+            message=(
+                f"Install-time dropper in {path}: setup.py {how}. `pip install` "
+                f"runs this automatically before any user code -- supply-chain RCE."
+            ),
+            evidence={
+                "path": path,
+                "curl_pipe_shell": curl_pipe,
+                "remote_fetch": remote_fetch,
+                "executes_code": executes_code,
+            },
+            tags=["source", "supply_chain", "install_dropper", "dropper"],
+        ))
+
+    return obs
+
+
 def detect_behavioral_patterns(content: str, path: str) -> list[Observation]:
     """Detect operational intent: reading sensitive files + exfiltrating data."""
     obs: list[Observation] = []
@@ -765,17 +837,36 @@ def detect_behavioral_patterns(content: str, path: str) -> list[Observation]:
         # Compound: reads sensitive files AND transmits data
         sensitive_summary = ", ".join(set(h[:40] for h in all_sensitive[:5]))
         exfil_summary = ", ".join(set(h[:30] for h in exfil_hits[:3]))
+        # Install-time context elevates this to MALICIOUS: a setup.py that reads
+        # credential files and exfiltrates them steals secrets on `pip install`,
+        # automatically, before the victim ever runs the package. No legitimate
+        # install script reads ~/.ssh / ~/.aws / ~/.npmrc and POSTs them out.
+        install_ctx = _is_install_script(path)
         obs.append(Observation(
             source="source-heuristic",
-            category="behavioral:credential_access_exfil",
-            severity=ObservationSeverity.MEDIUM,
-            message=f"Behavioral pattern in {path}: accesses sensitive files ({sensitive_summary}) and transmits data externally ({exfil_summary}). Characteristic of credential theft.",
+            category=(
+                "behavioral:install_hook_credential_exfil"
+                if install_ctx else "behavioral:credential_access_exfil"
+            ),
+            severity=ObservationSeverity.HIGH if install_ctx else ObservationSeverity.MEDIUM,
+            message=(
+                f"Install-time credential theft in {path}: setup.py accesses sensitive "
+                f"files ({sensitive_summary}) and transmits them externally ({exfil_summary}). "
+                f"This runs on `pip install` before any user code -- supply-chain credential theft."
+                if install_ctx else
+                f"Behavioral pattern in {path}: accesses sensitive files ({sensitive_summary}) "
+                f"and transmits data externally ({exfil_summary}). Characteristic of credential theft."
+            ),
             evidence={
                 "path": path,
+                "install_hook": install_ctx,
                 "sensitive_paths": list(set(h[:60] for h in all_sensitive[:10])),
                 "exfil_methods": list(set(h[:40] for h in exfil_hits[:5])),
             },
-            tags=["source", "behavioral", "credential_theft"],
+            tags=(
+                ["source", "behavioral", "credential_theft", "supply_chain", "install_dropper"]
+                if install_ctx else ["source", "behavioral", "credential_theft"]
+            ),
         ))
     elif all_sensitive and len(all_sensitive) >= 3:
         # Bulk sensitive file access without obvious exfil (might use indirect method)
@@ -1030,6 +1121,8 @@ def analyze_source(content: str, path: str, classification: FileClassification, 
     observations.extend(detect_secrets(analysis_content, path))
     observations.extend(detect_behavioral_patterns(analysis_content, path))
     observations.extend(detect_indirect_exec(analysis_content, path))
+    # setup.py is SOURCE-classified but runs at install time -- check it for droppers.
+    observations.extend(detect_install_hooks(analysis_content, path))
     if classification == FileClassification.CONFIG:
         observations.extend(detect_dependency_risks(content, path))
 
